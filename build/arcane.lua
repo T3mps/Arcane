@@ -323,11 +323,6 @@ function arcane_game_module(name)
         -- Monolithic: headers only -- a static library that linked the module
         -- libraries would hand the package a second copy of each.
         arc_module_consumer(ARCANE_MODULES, modules, { stage = false, link = not monolithic })
-        -- The plugin ABI digest (ARC_GAME_MODULE's GamePlugin_ABIDigest) is
-        -- AbiManifestMix() evaluated in THIS translation unit, and the manifest
-        -- includes the game-facing headers of every module: headers only, so a
-        -- game that depends on ArcaneEngine alone still compiles it.
-        arc_module_consumer(ARCANE_MODULES, ARCANE_MODULES.order, { link = false, stage = false })
         -- A descriptor's own thirdParty entries: header roots only (a game
         -- links no vendor library of its own through the SDK).
         if descriptor then

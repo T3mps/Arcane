@@ -645,10 +645,11 @@ project "arcbuild"
 -- alignof / offsetof of the game-facing by-value closure. `--write` writes
 -- build/abi-digest.txt, `--check` fails when that file or kGamePluginABIDigest
 -- disagrees (scripts/ci/build.* run it after the engine build). The prebuild
--- step copies AbiManifest.hpp with a comment line appended into
--- Intermediate/AbiDigest; AbiDigestCommented.cpp compiles that copy so the
--- [abi] test can prove a comment-only edit does not move the mix. Flags mirror a
--- game TU (build/arcane.lua): /arch:AVX2, /Zc:__cplusplus.
+-- step copies the Engine group manifest (Plugin/AbiManifestEngine.hpp) with a
+-- comment line appended into Intermediate/AbiDigest; AbiDigestCommented.cpp
+-- compiles that copy so the [abi] test can prove a comment-only edit does not
+-- move the mix. Flags mirror a game TU (build/arcane.lua): /arch:AVX2,
+-- /Zc:__cplusplus.
 -- ============================================================================
 group "Programs"
 project "arcane-abi-digest"
@@ -682,8 +683,8 @@ project "arcane-abi-digest"
 
     prebuildcommands {
         '{MKDIR} "%{wks.location}/Intermediate/AbiDigest"',
-        '{COPYFILE} "%{wks.location}/Source/Runtime/ArcaneCore/src/Arcane/Core/AbiManifest.hpp" "%{wks.location}/Intermediate/AbiDigest/AbiManifest.commented.hpp"',
-        'echo // appended comment line, no code>> "%{wks.location}/Intermediate/AbiDigest/AbiManifest.commented.hpp"',
+        '{COPYFILE} "%{wks.location}/Source/Runtime/ArcaneEngine/src/Arcane/Plugin/AbiManifestEngine.hpp" "%{wks.location}/Intermediate/AbiDigest/AbiManifestEngine.commented.hpp"',
+        'echo // appended comment line, no code>> "%{wks.location}/Intermediate/AbiDigest/AbiManifestEngine.commented.hpp"',
     }
 
     filter "system:windows"
@@ -2116,7 +2117,7 @@ project "ArcaneTests"
     -- AbiDigestTest.cpp ([abi]) runs arcane-abi-digest.exe and arcane-abi-digest-mutants.exe
     -- (sibling dirs) for the comment-stability and mutation cases; build them first.
     dependson { "arcane-abi-digest", "arcane-abi-digest-mutants" }
-    -- The two digest-gate fixture DLLs and their child exe (Plan B Task 2).
+    -- The digest-gate fixture DLLs and their child exe (Plan B Task 2).
     dependson { "AbiDigestBits64", "AbiDigestStale", "AbiDigestChild" }
     if os.target() == "windows" then
         dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
@@ -2294,10 +2295,6 @@ local function game_fixture_modules(descriptor, sourceRoot, handWrittenExports)
     local game = arc_game_descriptor(engine_modules, path.join(_MAIN_SCRIPT_DIR, descriptor), (not handWrittenExports) and path.join(_MAIN_SCRIPT_DIR, sourceRoot) or nil)
     if not game then error("[arcmodule] schema: missing game descriptor " .. descriptor, 0) end
     arc_module_consumer(engine_modules, game.modules, { stage = false })   -- loaded by a host that carries the modules
-    -- ARC_GAME_MODULE's GamePlugin_ABIDigest evaluates AbiManifestMix() in the
-    -- game's TU; the manifest includes every module's game-facing headers
-    -- (include dirs only, exactly as build/arcane.lua gives a game).
-    arc_module_consumer(engine_modules, engine_modules.order, { link = false, stage = false })
     for _, include in ipairs(game.thirdPartyIncludes) do includedirs { "%{wks.location}/" .. include } end
     if arc_closure_contains(engine_modules, game.modules, "ImGui") then
         -- IMGUI_API=dllimport: adopt ImGui.dll's single GImGui, exactly as
@@ -2360,14 +2357,19 @@ test_plugin("HotReloadPluginBad", { "HOTRELOAD_ABI_OFFSET=999",  "_CRT_SECURE_NO
 test_plugin("HotReloadPluginInitFail", { "HOTRELOAD_INIT_FAIL=1",  "_CRT_SECURE_NO_WARNINGS" })
 
 -- ============================================================================
--- AbiDigestBits64 / AbiDigestStale / AbiDigestChild (3D-readiness Plan B Task 2):
--- the plugin ABI-digest load gate's two refusal witnesses. Two REAL game-module
--- DLLs with the host's epoch and a wrong digest -- Bits64 is compiled with
--- ASTRA_ENTITY_BITS=64 so its own AbiManifestMix() differs, Stale returns a
--- constant -- and a disposable child exe that calls Plugin::Load on the path it
--- is given. ArcaneTests spawns the child once per DLL ([abi]); neither DLL is
--- ever loaded into ArcaneTests.exe (the 21 game headers' registrars and a
--- 64-bit Entity would corrupt its TypeContext).
+-- AbiDigestBits64 / AbiDigestStale / AbiDigestOldEpoch / AbiDigestNoExport /
+-- AbiDigestChild (3D-readiness Plan B Task 2): the plugin ABI-digest load gate's
+-- refusal witnesses. REAL game-module DLLs built from their ArcaneEngine-only
+-- descriptors (so their digest folds the committed Input / Client sub-digests,
+-- Plugin/AbiManifestGame.hpp). Bits64 and Stale have the host's epoch and a
+-- wrong digest (Bits64 is compiled with ASTRA_ENTITY_BITS=64 so its own
+-- AbiGameMix() differs; Stale returns a constant). OldEpoch (the previous epoch)
+-- and NoExport (the current epoch) export no digest at all: they pin the
+-- resolve order (epoch first, then the required digest export). A disposable
+-- child exe calls Plugin::Load on the path it is given. ArcaneTests spawns the
+-- child once per DLL ([abi]); no fixture DLL is ever loaded into
+-- ArcaneTests.exe (the 21 game headers' registrars and a 64-bit Entity would
+-- corrupt its TypeContext).
 -- ============================================================================
 local function abi_digest_fixture(name, defs)
     group "Tests/Fixtures"

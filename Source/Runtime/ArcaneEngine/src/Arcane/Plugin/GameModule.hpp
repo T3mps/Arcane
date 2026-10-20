@@ -167,7 +167,7 @@ namespace Arcane
         }
 
     private:
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
         EngineContext*           m_ctx        = nullptr;
         Arcane::ComponentModule* m_components = nullptr;
     };
@@ -352,7 +352,7 @@ namespace Arcane
   #define ARC_GAME_MODULE_ABI_CHECK_(Abi)                                                          \
       static_assert(static_cast<uint32_t>(Abi) == ::Arcane::kGamePluginABIVersion,                 \
                     "ARC_GAME_MODULE: a monolithic game must report the SDK's ABI version"); \
-      static_assert(::Arcane::AbiManifestMix() == ::Arcane::kGamePluginABIDigest,                  \
+      static_assert(::Arcane::AbiGameMix() == ::Arcane::kGamePluginABIDigest,                \
                     "ARC_GAME_MODULE: digest does not match build/abi-digest.txt");
 #else
   #define ARC_GAME_MODULE_ABI_CHECK_(Abi)
@@ -384,7 +384,7 @@ namespace Arcane
         ARC_GAME_MODULE_EXPORT void GamePlugin_Update(double dt, double alpha)                  \
         { if (auto* m = arcane_game_module_state_.instance) m->OnUpdate(dt, alpha); }              \
         ARC_GAME_MODULE_EXPORT std::uint64_t GamePlugin_ABIDigest()                             \
-        { return ::Arcane::AbiManifestMix(); }                                                     \
+        { static constexpr std::uint64_t digest = ::Arcane::AbiGameMix(); return digest; }         \
         ARC_GAME_MODULE_EXPORT void GamePlugin_DrawUI()                                         \
         {                                                                                          \
             arcane_game_module_state_.DrawUI();                                                   \
@@ -404,9 +404,13 @@ namespace Arcane
         }                                                                                         \
     }
 
-// The macro above calls ::Arcane::AbiManifestMix() in the GAME's translation
-// unit, so the digest it exports is the one THAT TU computed (a game built with
-// -DASTRA_ENTITY_BITS=64 exports a different integer). AbiManifest.hpp includes
-// this header, so it is pulled in last, after every definition it needs; its
-// own pragma once breaks the cycle in either include order.
-#include <Arcane/Core/AbiManifest.hpp>
+// The macro above evaluates ::Arcane::AbiGameMix() in the GAME's translation
+// unit, at compile time, so the digest it exports is the one THAT TU computed (a
+// game built with -DASTRA_ENTITY_BITS=64 exports a different integer).
+// AbiManifestGame.hpp reaches only this game's module closure: it hashes the
+// Engine group always and the Input / Client groups when their headers are
+// visible, else folds the committed sub-digests. The Engine group manifest
+// includes this header, so it is pulled in last, after every definition it
+// needs; AbiManifestGame.hpp declares the group mixes before it includes the
+// group headers, so the cycle resolves in either include order.
+#include <Arcane/Plugin/AbiManifestGame.hpp>

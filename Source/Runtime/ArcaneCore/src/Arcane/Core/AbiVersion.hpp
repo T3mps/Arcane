@@ -11,9 +11,17 @@ namespace Arcane
     ARC_CORE_API std::uint32_t PluginABIVersion();
 
     // The compiler-derived layout digest (Core/AbiManifest.hpp, AbiManifestMix() at
-    // the default Astra defines). It must equal the integer in build/abi-digest.txt;
-    // `arcane-abi-digest --check` and the [abi] tests enforce that. Regenerate with
-    // `arcane-abi-digest --write` after rebuilding the tool, then copy the value here.
+    // the default Astra defines): FoldGroups(Engine, Input, Client) of the three
+    // group manifests. It must equal the integer in build/abi-digest.txt.
+    // The two sub-digests are the Input and Client group mixes: a game TU that
+    // cannot include a group's headers folds the committed value in its place
+    // (Plugin/AbiManifestGame.hpp). `arcane-abi-digest --check` and the [abi] tests
+    // enforce all three. `arcane-abi-digest --write` (after rebuilding the tool)
+    // rewrites the file and these three values; then rebuild.
     ARC_CONSTANT("ABI: compiler-derived layout digest; regenerate with arcane-abi-digest --write")
-    inline constexpr std::uint64_t kGamePluginABIDigest = 0x09b51f9b4ffcb919ull;
+    inline constexpr std::uint64_t kGamePluginABIDigest = 0xa5c0ee994418cfd5ull;
+    ARC_CONSTANT("ABI: the Input group's committed sub-digest; regenerate with arcane-abi-digest --write")
+    inline constexpr std::uint64_t kGamePluginABIDigestInput = 0x63304e30bfdae997ull;
+    ARC_CONSTANT("ABI: the Client group's committed sub-digest; regenerate with arcane-abi-digest --write")
+    inline constexpr std::uint64_t kGamePluginABIDigestClient = 0x0e957f5c80a5bbc6ull;
 }

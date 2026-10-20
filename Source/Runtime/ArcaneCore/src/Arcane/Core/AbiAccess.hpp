@@ -1,10 +1,13 @@
 #pragma once
 
-// Forward declaration of the ABI manifest's accessor. A class whose private
-// members game code reaches through inline accessors befriends it:
-//     friend struct ::Arcane::Detail::AbiManifest::Access;
-// so Core/AbiManifest.hpp can hash those members' offsets and sizes. This is
-// the only thing the friend grants; Access has no behaviour (it holds
-// constexpr hashing functions evaluated at compile time).
+// Forward declarations of the ABI manifest's accessors. A class whose private
+// members game code reaches through inline accessors befriends one:
+//     friend struct ::Arcane::Detail::AbiManifest::Access;        // Engine group
+//     friend struct ::Arcane::Detail::AbiManifest::ClientAccess;  // Client group
+// so the group manifest (Plugin/AbiManifestEngine.hpp, Client/AbiManifestClient.hpp)
+// can hash those members' offsets and sizes. This is the only thing the friend
+// grants; the accessors have no behaviour (they hold constexpr hashing
+// functions evaluated at compile time). Each group defines its own, so the
+// Engine manifest needs no Client header.
 
-namespace Arcane::Detail::AbiManifest { struct Access; }
+namespace Arcane::Detail::AbiManifest { struct Access; struct ClientAccess; }

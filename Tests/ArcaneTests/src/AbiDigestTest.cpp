@@ -1,7 +1,11 @@
 // The compiler-derived plugin ABI digest (3D-readiness Plan B, Task 1).
 //
-// build/abi-digest.txt holds AbiManifestMix() at the default Astra defines;
-// kGamePluginABIDigest is the same value, compiled in. The tool
+// build/abi-digest.txt holds AbiManifestMix() at the default Astra defines:
+// FoldGroups() of the Engine, Input and Client group mixes (the manifests
+// Plugin/AbiManifestEngine.hpp, Input/AbiManifestInput.hpp,
+// Client/AbiManifestClient.hpp). kGamePluginABIDigest is the same value, and
+// kGamePluginABIDigestInput / kGamePluginABIDigestClient the Input and Client
+// mixes, compiled in. The tool
 // arcane-abi-digest (Source/Programs/arcane-abi-digest) writes and checks the
 // file. These cases pin the file, the constant, comment stability and the
 // mutation witnesses (second translation units that compile a comment-appended
@@ -187,7 +191,8 @@ namespace
     // struct's members are public until a `private:`/`protected:` label, a class's
     // private until `public:`. Functions, constructors, usings, friends, templates and
     // enums are not fields; brace initialisers and inline function bodies are skipped.
-    // A type that declares `friend struct ...Detail::AbiManifest::Access;` has handed
+    // A type that declares `friend struct ...Detail::AbiManifest::Access;` (or
+    // ClientAccess, the Client group's accessor) has handed
     // the manifest its private members too: ScannedType::Checked() then includes them.
     enum class Scope { Namespace, Struct, Other };
 
@@ -274,7 +279,7 @@ namespace
         std::string head;
         int skipDepth = 0;   // inside a skipped brace group (function body / initialiser)
         const auto top = [&]() { return stack.empty() ? Scope::Namespace : stack.back().kind; };
-        static const std::regex friendRe(R"(\bfriend\s+struct\s+(?:::)?(?:Arcane::)?Detail::AbiManifest::Access\b)");
+        static const std::regex friendRe(R"(\bfriend\s+struct\s+(?:::)?(?:Arcane::)?Detail::AbiManifest::(?:Client)?Access\b)");
 
         for (std::size_t i = 0; i < text.size(); ++i)
         {
@@ -395,12 +400,46 @@ namespace
         return std::regex_search(manifest, re);
     }
 
-    fs::path ManifestPath()
+    // The digest's three group manifests (Core/AbiManifest.hpp folds them). The
+    // completeness scans read all three as one text.
+    constexpr const char* kManifestFiles[] = {
+        "Source/Runtime/ArcaneEngine/src/Arcane/Plugin/AbiManifestEngine.hpp",
+        "Source/Client/ArcaneInput/src/Arcane/Input/AbiManifestInput.hpp",
+        "Source/Client/ArcaneClient/src/Arcane/Client/AbiManifestClient.hpp",
+    };
+
+    // The Engine group: the one the comment-stability witness copies.
+    fs::path EngineManifestPath() { return RepoRootDir() / kManifestFiles[0]; }
+
+    std::string ManifestCode()
     {
-        return RepoRootDir() / "Source/Runtime/ArcaneCore/src/Arcane/Core/AbiManifest.hpp";
+        std::string code;
+        for (const char* file : kManifestFiles)
+        {
+            const std::string text = ReadFileBinary(RepoRootDir() / file);
+            REQUIRE_FALSE(text.empty());
+            code += StripPublic(text, true);
+            code += '\n';
+        }
+        return code;
     }
 
-    std::string ManifestCode() { return StripPublic(ReadFileBinary(ManifestPath()), true); }
+    // Each group file's mix function, from its definition to the end of that file
+    // (calls to the R_ accessors count only there).
+    std::string MixBodies()
+    {
+        static const std::regex mixRe(R"(constexpr\s+std::uint64_t\s+AbiManifest\w+Mix\(\)\s*noexcept\s*\{)");
+        std::string bodies;
+        for (const char* file : kManifestFiles)
+        {
+            const std::string code = StripPublic(ReadFileBinary(RepoRootDir() / file), true);
+            std::smatch m;
+            REQUIRE(std::regex_search(code, m, mixRe));
+            bodies += code.substr(static_cast<std::size_t>(m.position(0)));
+            bodies += '\n';
+        }
+        return bodies;
+    }
 
     // Runs `exe args` and returns its stdout. cmd.exe /c wants the whole line wrapped in
     // one more pair of quotes; /bin/sh wants the executable path quoted on its own.
@@ -419,6 +458,29 @@ namespace
         const int status = ABI_TEST_PCLOSE(pipe);
         CHECK(status == 0);
         return out;
+    }
+
+    // Runs `exe args` with stderr folded into stdout and returns the exit status
+    // (0 is success; any other value is a failure, on every platform) and output.
+    struct ToolRun
+    {
+        int         status = -1;
+        std::string output;
+    };
+    ToolRun RunWithStatus(const fs::path& exe, const std::string& args)
+    {
+#if defined(_WIN32)
+        const std::string line = "\"\"" + exe.string() + "\" " + args + " 2>&1\"";
+#else
+        const std::string line = "'" + exe.string() + "' " + args + " 2>&1";
+#endif
+        ToolRun run;
+        FILE* pipe = ABI_TEST_POPEN(line.c_str(), "r");
+        REQUIRE(pipe != nullptr);
+        char buf[256];
+        while (std::fgets(buf, sizeof(buf), pipe)) run.output += buf;
+        run.status = ABI_TEST_PCLOSE(pipe);
+        return run;
     }
 
     fs::path SiblingTool(const char* dir, const char* exe)
@@ -444,16 +506,45 @@ TEST_CASE("abi digest matches build/abi-digest.txt", "[plugin][abi]")
 TEST_CASE("kGamePluginABIDigest equals the compiler-derived mix", "[plugin][abi]")
 {
     CHECK(Arcane::kGamePluginABIDigest == Arcane::AbiManifestMix());
+    // The committed sub-digests a game folds for a group it cannot see.
+    CHECK(Arcane::kGamePluginABIDigestInput == Arcane::AbiManifestInputMix());
+    CHECK(Arcane::kGamePluginABIDigestClient == Arcane::AbiManifestClientMix());
+}
+
+TEST_CASE("a game TU's digest equals the host's with or without the Input and Client headers", "[plugin][abi]")
+{
+    // ArcaneTests sees every module, so its AbiGameMix() (Plugin/AbiManifestGame.hpp,
+    // the expression ARC_GAME_MODULE exports) hashes all three groups itself.
+    STATIC_REQUIRE(ARC_ABI_GAME_HASHES_INPUT == 1);
+    STATIC_REQUIRE(ARC_ABI_GAME_HASHES_CLIENT == 1);
+    CHECK(Arcane::AbiGameMix() == Arcane::AbiManifestMix());
+    CHECK(Arcane::AbiGameMix() == Arcane::kGamePluginABIDigest);
+    // An ArcaneEngine-only game hashes the Engine group and folds the committed
+    // sub-digests: the same value. (The [hotreload] fixtures are such games and
+    // load through the digest gate; AbiDigestBits64 static_asserts it is one.)
+    using Arcane::Detail::AbiManifest::FoldGroups;
+    CHECK(FoldGroups(Arcane::AbiManifestEngineMix(), Arcane::kGamePluginABIDigestInput,
+                     Arcane::kGamePluginABIDigestClient) == Arcane::kGamePluginABIDigest);
+    // Each group moves the fold, and so does the group order.
+    const std::uint64_t e = Arcane::AbiManifestEngineMix();
+    const std::uint64_t i = Arcane::AbiManifestInputMix();
+    const std::uint64_t c = Arcane::AbiManifestClientMix();
+    CHECK(FoldGroups(e ^ 1, i, c) != FoldGroups(e, i, c));
+    CHECK(FoldGroups(e, i ^ 1, c) != FoldGroups(e, i, c));
+    CHECK(FoldGroups(e, i, c ^ 1) != FoldGroups(e, i, c));
+    CHECK(FoldGroups(e, c, i) != FoldGroups(e, i, c));
 }
 
 TEST_CASE("a comment-only change does not move the abi digest", "[plugin][abi]")
 {
-    // The tool compiles TWO translation units: one includes AbiManifest.hpp, the
-    // other a copy of it with a comment line appended (generated by the tool's
-    // prebuild step into Intermediate/AbiDigest). Each bakes its mix at compile
-    // time. A source-text hash of the copy differs; the mix must not.
-    const fs::path original = ManifestPath();
-    const fs::path commented = RepoRootDir() / "Intermediate/AbiDigest/AbiManifest.commented.hpp";
+    // The tool compiles TWO translation units: one includes the manifest, the
+    // other first includes a copy of the Engine group manifest
+    // (Plugin/AbiManifestEngine.hpp, the bulk of the records) with a comment line
+    // appended (generated by the tool's prebuild step into Intermediate/AbiDigest).
+    // Each bakes its mix at compile time. A source-text hash of the copy differs;
+    // the mix must not.
+    const fs::path original = EngineManifestPath();
+    const fs::path commented = RepoRootDir() / "Intermediate/AbiDigest/AbiManifestEngine.commented.hpp";
     REQUIRE(fs::exists(original));
     REQUIRE(fs::exists(commented));
     const std::string a = ReadFileBinary(original);
@@ -514,7 +605,7 @@ TEST_CASE("every public struct field is in the abi manifest", "[plugin][abi]")
         CHECK(two[0].second == "a");
         CHECK(two[1].second == "b");
         CHECK(two[2].second == "c");
-        // A class is private until public:, and its private members count only when it befriends Access.
+        // A class is private until public:, and its private members count only when it befriends Access (or ClientAccess).
         CHECK(CheckedFields("class K { int hidden; public: int shown; };").size() == 1);
         const auto fr = CheckedFields("class K { friend struct ::Arcane::Detail::AbiManifest::Access; int hidden; public: int shown; };");
         REQUIRE(fr.size() == 2);
@@ -584,7 +675,7 @@ TEST_CASE("a private data member is hashed or allow-listed", "[plugin][abi]")
             bool hasPrivate = false;
             for (const ScannedField& f : t.fields) hasPrivate = hasPrivate || f.priv;
             if (!hasPrivate || t.friendAccess || allowList.count(t.name) != 0) continue;
-            INFO(t.name << " has private data members and no `friend struct ...Detail::AbiManifest::Access;`");
+            INFO(t.name << " has private data members and no `friend struct ...Detail::AbiManifest::Access;` (ClientAccess in the Client group)");
             CHECK(false);
         }
     };
@@ -596,15 +687,13 @@ TEST_CASE("a private data member is hashed or allow-listed", "[plugin][abi]")
 TEST_CASE("every manifest accessor record is called", "[plugin][abi]")
 {
     // Each befriended record's text lives in a `static constexpr void R_<X>(Fnv&)` body
-    // of Access, and AbiManifestMix() must call `Access::R_<X>(f);` exactly once. Delete
-    // a call and the text scans still see the entries while --write re-blesses a digest
-    // that has silently lost the record.
+    // of Access (ClientAccess in the Client group), and its group's mix function must
+    // call `Access::R_<X>(f);` exactly once. Delete a call and the text scans still see
+    // the entries while --write re-blesses a digest that has silently lost the record.
     const std::string manifest = ManifestCode();
     REQUIRE_FALSE(manifest.empty());
-    // Calls count only inside AbiManifestMix() (a call from another R_ body is dead code).
-    const auto mixAt = manifest.find("constexpr std::uint64_t AbiManifestMix()");
-    REQUIRE(mixAt != std::string::npos);
-    const std::string mixBody = manifest.substr(mixAt);
+    // Calls count only inside the mix functions (a call from another R_ body is dead code).
+    const std::string mixBody = MixBodies();
     static const std::regex defRe(R"(static\s+constexpr\s+void\s+(R_\w+)\s*\()");
     std::size_t defs = 0;
     for (std::sregex_iterator it(manifest.begin(), manifest.end(), defRe), end; it != end; ++it)
@@ -857,4 +946,31 @@ TEST_CASE("a 64-bit digest DLL and a stale digest DLL are refused before Init", 
     CHECK(stale.exitCode == 0);
     CHECK(stale.kind == "AbiMismatch");
     CHECK_FALSE(fs::exists(stale.sentinel));
+}
+
+TEST_CASE("a stale committed sub-digest fails arcane-abi-digest --check", "[plugin][abi]")
+{
+    // A game that cannot see the Input or Client headers folds the COMMITTED
+    // sub-digest (kGamePluginABIDigestInput / kGamePluginABIDigestClient,
+    // Core/AbiVersion.hpp) into its digest instead of hashing that group itself.
+    // A stale committed sub-digest would make every such game disagree with the
+    // host, so --check fails on it. --committed-input / --committed-client stand
+    // in for the compiled-in constant (the witness for "the constant is stale").
+    const fs::path tool = SiblingTool("arcane-abi-digest", "arcane-abi-digest");
+    REQUIRE(fs::exists(tool));
+    const std::string root = "--root \"" + RepoRootDir().string() + "\"";
+
+    const ToolRun ok = RunWithStatus(tool, "--check " + root);
+    INFO("--check: " << ok.output);
+    CHECK(ok.status == 0);
+
+    const ToolRun client = RunWithStatus(tool, "--check " + root + " --committed-client 0000000000000001");
+    INFO("--check --committed-client: " << client.output);
+    CHECK(client.status != 0);
+    CHECK(client.output.find("kGamePluginABIDigestClient") != std::string::npos);
+
+    const ToolRun input = RunWithStatus(tool, "--check " + root + " --committed-input 0000000000000001");
+    INFO("--check --committed-input: " << input.output);
+    CHECK(input.status != 0);
+    CHECK(input.output.find("kGamePluginABIDigestInput") != std::string::npos);
 }

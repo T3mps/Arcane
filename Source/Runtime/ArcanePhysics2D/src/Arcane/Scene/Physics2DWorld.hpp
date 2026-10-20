@@ -88,7 +88,7 @@ namespace Arcane
 
     private:
         friend struct PhysicsSystem2D;
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
         friend struct ::Arcane::Detail::Physics2D::Access;
 
         ARC_PHYSICS2D_API void RecordBody(Arcane::Entity entity, Guid guid, Detail::Physics2D::BodyHandle handle,
@@ -118,7 +118,7 @@ namespace Arcane
         void operator()(Arcane::Registry& reg);
 
     private:
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
         float m_fixedDt;
         bool  m_stepWorld;
     };

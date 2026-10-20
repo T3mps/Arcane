@@ -152,7 +152,7 @@ namespace Arcane
         std::size_t InstantiateInto(SystemSchedulers& into, NetMode mode) const;
 
     private:
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
         std::vector<SystemFactoryEntry> m_entries;
         const void*                     m_openOwner = nullptr;
     };

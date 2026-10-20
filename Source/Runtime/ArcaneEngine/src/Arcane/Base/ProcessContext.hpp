@@ -49,7 +49,7 @@ namespace Arcane
         // this context instantiates the subset matching its own NetMode.
         [[nodiscard]] SystemFactoryTable& SystemFactories() noexcept { return m_factories; }
     private:
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
         explicit ProcessContext(const ProcessContextDesc& desc);
         std::unique_ptr<::Arcane::TypeContext> m_owned;    // null when adopting
         ::Arcane::TypeContext*                 m_context = nullptr;

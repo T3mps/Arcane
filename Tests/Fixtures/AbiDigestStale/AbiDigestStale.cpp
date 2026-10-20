@@ -2,7 +2,7 @@
 //
 // Default entity bits and a matching epoch, but GamePlugin_ABIDigest returns a
 // stale constant (1), which is not the current mix. The exports are
-// hand-written: ARC_GAME_MODULE would return AbiManifestMix().
+// hand-written: ARC_GAME_MODULE would return AbiGameMix().
 //
 // A real game-module DLL loaded ONLY by the AbiDigestChild process (never by
 // ArcaneTests.exe): GamePlugin_Init writes a sentinel file named by the

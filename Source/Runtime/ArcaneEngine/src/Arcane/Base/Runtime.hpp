@@ -394,7 +394,7 @@ namespace Arcane
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
         struct Impl;
         std::unique_ptr<Impl> m_impl;
     };
