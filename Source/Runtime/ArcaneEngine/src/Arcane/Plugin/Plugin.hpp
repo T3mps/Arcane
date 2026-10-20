@@ -64,7 +64,7 @@ namespace Arcane
         // A game linked INTO the host (the monolithic layout; engine
         // modularization s3.1): no Module, no file -- the table is
         // ArcGameModule_Get()'s. This only copies the table; the ABI gate for it
-        // is AdoptStaticGameModule (above), which PluginHost calls first. `table` must outlive the Plugin (it is
+        // is AdoptStaticGameModule (below), which PluginHost calls first. `table` must outlive the Plugin (it is
         // the game's function-local static). The cvar module is registered by
         // NAME only: there is no image range, and nothing in a package unloads.
         [[nodiscard]] static Plugin FromStatic(const PluginVTable& table, std::string cvarModule);

@@ -1203,7 +1203,7 @@ namespace Arcane
     //     engine sync).
     // v62 (3D-readiness Plan B Task 2): adds GamePlugin_ABIDigest and
     //     PluginVTable::ABIDigest (a ninth pointer, after DrawUI). The host
-    //     compares the export against kGamePluginABIDigest (Core/AbiManifest.hpp)
+    //     compares the export against kGamePluginABIDigest (Core/AbiVersion.hpp)
     //     after the epoch matches and refuses a module whose digest differs,
     //     before Init, on the loaded-DLL path and the static adoption path.
     //     ReferenceProject.arcproj and the arcbuild fixture restamped.
@@ -1258,7 +1258,7 @@ namespace Arcane
         // in the sim phase (before BeginFrame), so it is too early for ImGui.
         inline constexpr const char* kDrawUI      = "GamePlugin_DrawUI";
         // v62: the compiler-derived layout digest of THIS module's build
-        // (AbiManifestMix() evaluated in the module's TU). Required, but only
+        // (AbiGameMix() evaluated in the module's TU). Required, but only
         // resolved once the epoch matches, so an old module without it still
         // fails at the epoch compare.
         inline constexpr const char* kABIDigest   = "GamePlugin_ABIDigest";
@@ -1280,7 +1280,7 @@ namespace Arcane
         // ImGui draw window). Update is sim-phase -- too early. May be null if a plugin
         // does not export it (resolution is lenient); the host null-checks before calling.
         void     (*DrawUI)()                             = nullptr;
-        // v62: AbiManifestMix() as the MODULE's translation unit evaluated it. The
+        // v62: AbiGameMix() as the MODULE's translation unit evaluated it. The
         // host compares it with kGamePluginABIDigest (AcceptPluginAbi) before Init.
         std::uint64_t (*ABIDigest)()                     = nullptr;
     };
