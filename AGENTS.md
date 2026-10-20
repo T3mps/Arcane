@@ -17,9 +17,14 @@ the summary is in [CLAUDE.md](CLAUDE.md) under "Servitor". The core loop:
 `screenshot` / `compare` / `step N` / `entity get` / `ecs query` / `logs`,
 then `quit`.
 
-Pass `--project ReferenceProject` always and `--client <agent-name>` on every call
-except `launch` and `status` (they refuse `--client`, exit 2), and branch on the
-exit code (0 ok, 4 no host, 5 retry, 6 failed, 7 host died, 8 check failed).
+Pass `--project ReferenceProject` and `--client <agent-name>` on every call,
+`launch` and `status` included. `status --client NAME` lists that client's hosts,
+and `quit --client NAME` quits the hosts that client launched (several need
+`--yes`; none is exit 4), so launch and quit with the same name. Under
+`--json`/`--format json|ndjson` all output is on stdout and stderr stays empty.
+`--owner-pid` is opt-in (Servitor never sets it). Branch on the exit code
+(0 ok, 2 usage, 3 permission, 4 no host, 5 retry, 6 failed, 7 host died,
+8 check failed).
 Never drive an editor the user has open, and never `--bless` through Servitor.
 Codex: allow localhost network access in the sandbox, or every call fails
 with exit 4/7.

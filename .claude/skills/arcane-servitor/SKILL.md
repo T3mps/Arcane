@@ -19,7 +19,8 @@ A Servitor check is evidence for THIS change, not a regression net. If the behav
 - **Project:** `--project <dir|.arcproj>`, otherwise the nearest `.arcproj` above the working directory.
 - **Engine root:** `--engine <root>` or `SERVITOR_ENGINE` when servitor cannot find the host exes beside itself.
 - **Name yourself:** pass `--client claude-code` on every call, `launch` and `status` included, so the host's audit log (`Saved\Remote\audit.ndjson`) names the agent. `launch --client NAME` records NAME in the host's descriptor; `status --client NAME` lists only that client's hosts; `quit --client NAME` quits the hosts that client launched (several need `--yes`; none is exit 4), so launch with the same `--client` you quit with.
-- **Read the output:** `--format json` (or `--json`) gives the full envelope. Branch on the exit code, never on HTTP status.
+- **Read the output:** `--format json` (or `--json`) gives the full envelope, `--format ndjson` frames it. Under json and ndjson everything, usage refusals and `--verbose` notes included, is on stdout and stderr stays empty (a refusal is one `arg.invalid` envelope with `client.exitCode` 2; `--verbose` adds a `servitor.verbose` warning). Human format writes diagnostics to stderr. Branch on the exit code, never on HTTP status.
+- **Hosts end themselves.** An open-ended `--remote` host with no request for `--remote-idle-exit` seconds (default 600, 0 = never) exits. `--owner-pid <pid>` (after `--` on `launch`) additionally ends the host when that process is gone. It is opt-in: Servitor never fills it in and an omitted pid watches nothing. Still `quit` what you launched.
 
 How each host gets remote:
 
@@ -60,6 +61,51 @@ set P=--project ReferenceProject --client claude-code
 
 :: clean up what you launched
 %S% %P% --host runtime quit
+```
+
+### Wrappers that always clean up
+
+Both launch with a client name, branch on the exit code and `quit` the host they launched even when a step fails. The name passed to `quit` is the name passed to `launch`.
+
+PowerShell 5.1:
+
+```powershell
+$s = 'D:\dev\starworks\Arcane-fixes\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$c = @('--project', 'ReferenceProject', '--client', 'my-agent')
+function Step([string]$what) {
+    switch ($LASTEXITCODE) {
+        0 { return }
+        5 { throw "$what busy (5): retry" }
+        default { throw "$what failed with exit $LASTEXITCODE (2 usage, 3 permission, 4 no host, 6 failed, 7 host died, 8 check failed)" }
+    }
+}
+& $s @c launch runtime --headless -- --fixed-time 0
+Step 'launch'
+try {
+    & $s @c --host runtime wait settled; Step 'wait settled'
+    & $s @c --host runtime screenshot window --out "$env:TEMP\shot.png"; Step 'screenshot'
+}
+finally {
+    & $s @c --host runtime quit
+}
+```
+
+bash (Git Bash; the binary path is repo-relative):
+
+```bash
+S=Binaries/Debug-windows-x86_64-md/Servitor/servitor.exe
+C=(--project ReferenceProject --client my-agent)
+step() {  # step <what>: exit code of the previous command in $1
+  case "$1" in
+    0) ;;
+    5) echo "$2 busy (5): retry" >&2; exit 5 ;;
+    *) echo "$2 failed with exit $1 (2 usage, 3 permission, 4 no host, 6 failed, 7 host died, 8 check failed)" >&2; exit "$1" ;;
+  esac
+}
+"$S" "${C[@]}" launch runtime --headless -- --fixed-time 0; step $? launch
+trap '"$S" "${C[@]}" --host runtime quit' EXIT
+"$S" "${C[@]}" --host runtime wait settled; step $? "wait settled"
+"$S" "${C[@]}" --host runtime screenshot window --out /tmp/shot.png; step $? screenshot
 ```
 
 - `describe <command>` and `schema component <Name>` explain a command's or a component's arguments.

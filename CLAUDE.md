@@ -221,7 +221,7 @@ sessions and subagents, Grok, Codex/GPT, and any SDD implementer or reviewer.
 - **Branch on the exit code.** 0 ok; 2 usage; 3 permission; 4 no host; 5 busy
   (safe to retry); 6 the command failed (read `errors[0].code`); 7 the host died;
   8 a check failed (that IS the finding).
-- **Rules.** Name yourself with `--client` on every call, `launch` and `status` included. `quit --client NAME` quits the hosts that client launched (several need `--yes`; none is exit 4), so launch and quit with the same name. Launch your own `--headless` host;
+- **Rules.** Name yourself with `--client` on every call, `launch` and `status` included. `quit --client NAME` quits the hosts that client launched (several need `--yes`; none is exit 4), so launch and quit with the same name. Under `--json`/`--format json|ndjson` everything is on stdout and stderr stays empty. `--owner-pid <pid>` (a host flag, after `--`) is opt-in and Servitor never sets it; an idle `--remote` host also exits after `--remote-idle-exit` seconds. Launch your own `--headless` host;
   never drive (`play`/`stop`/`quit`/`cvar set`) an editor the user has open.
   Never `--bless` through Servitor. `quit` every host you launched.
 - **Sandboxed CLIs.** Codex blocks loopback by default, so every call fails
