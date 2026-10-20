@@ -28,9 +28,14 @@ TEST_CASE("a requested remote Start failure returns Finish, and a failed report 
     const auto text = ReadRepoFile("Source/Programs/ArcaneServer/src/ServerApp.cpp");
     const auto start = text.find("if (!m_remote->Start())");
     REQUIRE(start != std::string::npos);
-    const auto window = text.substr(start, 180);
+    const auto window = text.substr(start, 260);
     CHECK(window.find("return Finish") != std::string::npos);
     CHECK(window.find("m_remote.reset()") == std::string::npos);
+    // Final fix pass (b6 minor): HostSession's last line says "this host runs
+    // without remote", so the server says it exits 2 before it does.
+    const auto said = window.find("exiting 2");
+    CHECK(said != std::string::npos);
+    CHECK(said < window.find("return Finish"));
     const auto finish = text.find("ServerApp::Finish");
     REQUIRE(finish != std::string::npos);
     const auto finishBody = text.substr(finish, 500);

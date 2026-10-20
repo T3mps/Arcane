@@ -215,8 +215,14 @@ namespace Arcane::Server
                 return { { "main", Arcane::ToString(app->m_runtime->Mode()), &app->m_runtime->Registry() } };
             };
             m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+            // Start logs why and that the host "runs without remote"; an
+            // explicit --remote that cannot start is a startup failure, so the
+            // server says so before the exit (final fix pass, b6 minor).
             if (!m_remote->Start())
-                return Finish(rep, "remote-failed", 2);   // Start logged why; an explicit --remote that cannot start is a startup failure
+            {
+                ARC_ERROR("ArcaneServer: --remote did not start (see above); exiting 2");
+                return Finish(rep, "remote-failed", 2);
+            }
         }
 #endif
 
