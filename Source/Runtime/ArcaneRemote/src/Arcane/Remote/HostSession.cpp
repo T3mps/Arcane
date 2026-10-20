@@ -92,6 +92,16 @@ bool Arming::RefusalExits(bool explicitRemote, bool startupArm)
     return explicitRemote && startupArm;
 }
 
+std::uint32_t Arming::IdleExitSeconds(bool explicitRemote, std::uint64_t frameBound, std::uint32_t configured)
+{
+    return (explicitRemote && frameBound == 0) ? configured : 0u;
+}
+
+std::uint32_t Arming::OwnerPid(bool explicitRemote, std::uint32_t configured)
+{
+    return explicitRemote ? configured : 0u;
+}
+
 HostSession::HostSession(Config config)
     : m_config(std::move(config))
 {

@@ -73,6 +73,14 @@ struct ARC_REMOTE_API Arming {
     // --remote at startup) or RefuseLog (anything later, or the cvar alone).
     enum class Verdict : std::uint8_t { Arm, RefuseExit, RefuseLog };
     static Verdict Attempt(bool& attemptedBefore, NetMode mode, bool explicitRemote);
+    // B7 fix round 1 (C2): the idle exit and the --owner-pid watch belong to
+    // a host a client started for itself: an explicit --remote (servitor
+    // launch always passes it) on an open-ended run (frameBound 0, no
+    // --frames N). Anything else gets 0 for both. That includes the editor a
+    // user opens by hand, armed by editor.remote.enable alone (default on): it
+    // never ends itself and watches no process.
+    static std::uint32_t IdleExitSeconds(bool explicitRemote, std::uint64_t frameBound, std::uint32_t configured);
+    static std::uint32_t OwnerPid(bool explicitRemote, std::uint32_t configured);
 };
 
 class ARC_REMOTE_API HostSession {

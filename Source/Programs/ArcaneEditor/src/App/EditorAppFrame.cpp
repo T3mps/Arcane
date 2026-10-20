@@ -1991,10 +1991,13 @@ namespace Arcane::Editor
         rc.projectRoot        = projectRoot;
         rc.descriptorOverride = m_config.remoteDescriptor;
         rc.client             = m_config.remoteClient;
-        rc.ownerPid           = m_config.ownerPid;
-        // The idle exit is for an abandoned open-ended headless editor only
-        // (spec s4.7); an interactive editor never ends itself.
-        rc.idleExitSeconds    = (m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
+        // The idle exit and the owner watch are for an editor a client
+        // launched (--remote, which servitor launch always passes) and left
+        // open-ended (spec s4.7). editor.remote.enable is on by default, so
+        // the editor a user opens by hand also arms this session; it never
+        // ends itself and watches no process (B7 fix round 1, C2).
+        rc.ownerPid           = Arcane::Remote::Arming::OwnerPid(m_config.remote, m_config.ownerPid);
+        rc.idleExitSeconds    = Arcane::Remote::Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames, m_config.remoteIdleExitSeconds);
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
                                   "problems", "scene", "selection", "stats" };
         // Task 16 hooks (ruling F12), main thread, hookUser = this. dirty is the

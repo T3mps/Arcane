@@ -8,6 +8,7 @@
 #include "ServerConfig.hpp"
 #include "../Helpers/ConstantScan.hpp"   // Arcane::Test::RepoRoot (the source pins)
 #include <sstream>
+#include <regex>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -562,7 +563,8 @@ TEST_CASE("omitted --owner-pid is zero, and a dead owner pid exits", "[host][rem
         session.Stop("test");
     }
 
-    // Source pins: the idle assignments key off maxFrames/frames alone, and every rc block copies ownerPid.
+    // Source pins: the idle assignments key off the explicit --remote and maxFrames/frames (never headless),
+    // through Arming's helpers, and every rc block copies ownerPid through Arming::OwnerPid.
     const auto read = [](const char* relative) {
         std::ifstream in(Arcane::Test::RepoRoot() / relative);
         REQUIRE(in.good());
@@ -582,13 +584,51 @@ TEST_CASE("omitted --owner-pid is zero, and a dead owner pid exits", "[host][rem
     const std::string runtimeIdle = lineWith(runtime, "rc.idleExitSeconds");
     const std::string editorIdle = lineWith(editor, "rc.idleExitSeconds");
     CHECK(runtimeIdle.find("headless") == std::string::npos);
-    CHECK(runtimeIdle.find("maxFrames == 0") != std::string::npos);
+    CHECK(runtimeIdle.find("Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames,") != std::string::npos);
     CHECK(editorIdle.find("headless") == std::string::npos);
-    CHECK(editorIdle.find("maxFrames == 0") != std::string::npos);
-    CHECK(lineWith(server, "rc.idleExitSeconds").find("frames == 0") != std::string::npos);
-    CHECK(runtime.find("rc.ownerPid") != std::string::npos);
-    CHECK(editor.find("rc.ownerPid") != std::string::npos);
-    CHECK(server.find("rc.ownerPid") != std::string::npos);
+    CHECK(editorIdle.find("Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames,") != std::string::npos);
+    CHECK(lineWith(server, "rc.idleExitSeconds").find("Arming::IdleExitSeconds(m_cfg.remote, m_cfg.frames,") != std::string::npos);
+    CHECK(lineWith(runtime, "rc.ownerPid").find("Arming::OwnerPid(m_config.remote,") != std::string::npos);
+    CHECK(lineWith(editor, "rc.ownerPid").find("Arming::OwnerPid(m_config.remote,") != std::string::npos);
+    CHECK(lineWith(server, "rc.ownerPid").find("Arming::OwnerPid(m_cfg.remote,") != std::string::npos);
+}
+
+// B7 fix round 1 (C2): editor.remote.enable defaults ON, so the editor a user
+// opens by hand arms a HostSession with no --remote. That editor must never
+// end itself on the idle timer (outside host.quit's unsaved-changes guard) and
+// never watch an owner pid: only an explicit --remote (servitor launch always
+// passes it) arms either, and only on an open-ended run.
+TEST_CASE("an editor armed only by editor.remote.enable never idle-exits or watches an owner", "[host][remote]") {
+    const Arcane::HostConfig byHand{};   // editor.remote.enable at its default, no --remote, no --frames
+    REQUIRE_FALSE(byHand.remote);
+    REQUIRE(byHand.maxFrames == 0);
+    REQUIRE(byHand.remoteIdleExitSeconds == 600);
+
+    // The editor's session config comes from these lines (EditorAppFrame.cpp is
+    // not compiled into ArcaneTests): both must key off the explicit --remote.
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    REQUIRE(in.good());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string editor = ss.str();
+    const auto lineWith = [&editor](const std::string& needle) {
+        const auto at = editor.find(needle);
+        REQUIRE(at != std::string::npos);
+        return editor.substr(at, editor.find('\n', at) - at);
+    };
+    // m_config.remote as a whole word: m_config.remoteIdleExitSeconds is not the flag.
+    const std::regex explicitRemote(R"(m_config\.remote\b)");
+    CHECK(std::regex_search(lineWith("rc.idleExitSeconds"), explicitRemote));
+    CHECK(std::regex_search(lineWith("rc.ownerPid"), explicitRemote));
+
+    // The rule those lines call: the hand-opened editor gets neither; a Servitor
+    // launch (--remote, open-ended) keeps both; --frames N never idles out.
+    using Arming = Arcane::Remote::Arming;
+    CHECK(Arming::IdleExitSeconds(byHand.remote, byHand.maxFrames, byHand.remoteIdleExitSeconds) == 0);
+    CHECK(Arming::OwnerPid(byHand.remote, 4242) == 0);
+    CHECK(Arming::IdleExitSeconds(true, 0, 600) == 600);
+    CHECK(Arming::IdleExitSeconds(true, 5, 600) == 0);
+    CHECK(Arming::OwnerPid(true, 4242) == 4242);
 }
 
 TEST_CASE("a descriptor without ownerPid reads zero, and one with it round-trips", "[host][remote][descriptor]") {
