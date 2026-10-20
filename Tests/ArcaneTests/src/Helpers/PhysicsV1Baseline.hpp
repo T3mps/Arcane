@@ -27,6 +27,16 @@ namespace Arcane::Test
     // `steps` fixed steps (one Advance(1/60) each); returns the whole trace file.
     std::string WriteV1StepTrace(Arcane::Runtime& rt, int steps);
 
+    // Which debug request a dump reproduces (see Task 2 of the plan).
+    enum class V1DebugView { WholeWorld, SelectedOnly, AltView };
+
+    // Header line plus one primitive per line. Call after the steps.
+    std::string DumpV1Debug(Arcane::Runtime& rt, const V1PhysicsScene& scene, V1DebugView view);
+    // Narrowphase inspector overlay: floor fixture 0 vs circle fixture 0.
+    std::string DumpV1Inspector(Arcane::Runtime& rt, const V1PhysicsScene& scene);
+    // CollectPickables over the (sprite-free) scene.
+    std::string DumpV1Pick(Arcane::Runtime& rt);
+
     std::string ReadFileBinary(const std::filesystem::path& path);
     void WriteFileBinary(const std::filesystem::path& path, const std::string& bytes);
 }

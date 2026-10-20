@@ -97,6 +97,54 @@ namespace Arcane::Test
             return f;
         }
 
+        std::uint64_t PackFixture(Manifold2D::Physics::FixtureHandle h)
+        {
+            return (static_cast<std::uint64_t>(h.index) << 32) | h.generation;
+        }
+
+        const Arcane::Affine2D kOrdinary{ { 640.0f, 360.0f }, { 100.0f, -100.0f } };
+        const Arcane::Affine2D kAlt{ { 100.0f, 80.0f }, { 50.0f, -40.0f } };
+
+        std::string DumpGeometry(const std::string& header, const Arcane::PhysicsDebugGeometry& g)
+        {
+            std::string out = header; out += '\n';
+            for (const auto& p : g.primitives)
+            {
+                if (p.kind == Arcane::PhysicsDebugPrimitive::Kind::Line)
+                    out += "line " + Hex8(p.a.x) + " " + Hex8(p.a.y) + " " + Hex8(p.b.x) + " " + Hex8(p.b.y) + " "
+                         + Hex8(p.size) + " " + Hex8(p.color.r) + " " + Hex8(p.color.g) + " " + Hex8(p.color.b) + " "
+                         + Hex8(p.color.a) + "\n";
+                else
+                    out += "circle " + Hex8(p.a.x) + " " + Hex8(p.a.y) + " " + Hex8(p.size) + " "
+                         + Hex8(p.color.r) + " " + Hex8(p.color.g) + " " + Hex8(p.color.b) + " " + Hex8(p.color.a) + "\n";
+            }
+            return out;
+        }
+
+        const Manifold2D::Physics::PhysicsWorld& Solver(Arcane::Runtime& rt)
+        {
+            auto* w = rt.Registry().GetResource<Arcane::PhysicsWorld2D>();
+            REQUIRE(w != nullptr);
+            const auto* s = Arcane::Detail::Physics2D::Access::Solver(*w);
+            REQUIRE(s != nullptr);
+            return *s;
+        }
+
+        // Compare a checked-in text snapshot: hash file, bytes, live dump.
+        void CompareSnapshot(const char* stem, const std::string& live)
+        {
+            const auto dir = RepoRoot() / "Tests/ArcaneTests/data/physics";
+            const auto path = dir / (std::string(stem) + ".txt");
+            const auto hashPath = dir / (std::string(stem) + ".sha256");
+            REQUIRE(fs::exists(path));
+            REQUIRE(fs::exists(hashPath));
+            const std::string disk = ReadFileBinary(path);
+            std::string expect = ReadFileBinary(hashPath);
+            if (!expect.empty() && expect.back() == '\n') expect.pop_back();
+            CHECK(Arcane::Crypto::Sha256Hex(disk) == expect);
+            CHECK(live == disk);
+        }
+
         void WriteSnapshot(const char* stem, const std::string& bytes)
         {
             const auto dir = RepoRoot() / "Tests/ArcaneTests/data/physics";
@@ -201,6 +249,102 @@ namespace Arcane::Test
         return out;
     }
 
+    std::string DumpV1Debug(Arcane::Runtime& rt, const V1PhysicsScene& scene, V1DebugView view)
+    {
+        auto& reg = rt.Registry();
+        auto* phys = reg.GetResource<Arcane::PhysicsWorld2D>();
+        REQUIRE(phys != nullptr);
+        const auto& solver = Solver(rt);
+
+        Arcane::PhysicsDebugDrawOptions2D opts = Arcane::MakePhysicsDebugDrawOptions();
+        const bool alt = view == V1DebugView::AltView;
+        opts.view = alt ? kAlt : kOrdinary;
+        opts.alpha = alt ? 0.25f : 0.0f;
+        opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
+        opts.velocities = false;
+        opts.comMarkers = false;
+        opts.orientations = false;
+        opts.contacts = view != V1DebugView::SelectedOnly;
+        const char* name = "wholeworld";
+        if (view == V1DebugView::SelectedOnly)
+        {
+            name = "selected";
+            const auto& ents = Arcane::Detail::Physics2D::Access::Entities(*phys);
+            const auto it = ents.find(scene.Circle());
+            REQUIRE(it != ents.end());
+            opts.onlyBody = Arcane::Detail::Physics2D::PackBody(it->second);
+        }
+        else if (alt) name = "altview";
+
+        Arcane::PhysicsDebugGeometry geo;
+        Arcane::GatherPhysicsDebug(solver, opts, Arcane::Settings<Arcane::PhysicsDebugStyleSettings2D>(), geo);
+        const std::string header = alt
+            ? std::string("arcane-physics-v1-debug 1 ") + name + " alpha 0.25 offset 100 80 scale 50 -40"
+            : std::string("arcane-physics-v1-debug 1 ") + name + " alpha 0 offset 640 360 scale 100 -100";
+        return DumpGeometry(header, geo);
+    }
+
+    std::string DumpV1Inspector(Arcane::Runtime& rt, const V1PhysicsScene& scene)
+    {
+        auto* phys = rt.Registry().GetResource<Arcane::PhysicsWorld2D>();
+        REQUIRE(phys != nullptr);
+        const auto& solver = Solver(rt);
+        const auto& ents = Arcane::Detail::Physics2D::Access::Entities(*phys);
+        const auto fi = ents.find(scene.Floor());
+        const auto ci = ents.find(scene.Circle());
+        REQUIRE(fi != ents.end());
+        REQUIRE(ci != ents.end());
+        REQUIRE(solver.FixtureCount(fi->second) >= 1u);
+        REQUIRE(solver.FixtureCount(ci->second) >= 1u);
+        const auto fa = solver.GetBodyFixture(fi->second, 0u);
+        const auto fb = solver.GetBodyFixture(ci->second, 0u);
+        Manifold2D::Physics::NarrowphaseTrace trace;
+        (void)solver.DebugCollide(fa, fb, trace);
+        Arcane::PhysicsDebugGeometry geo;
+        Arcane::GatherNarrowphaseWorldOverlay(trace, -1, kOrdinary, std::nullopt, 1.0f,
+            Arcane::Settings<Arcane::PhysicsDebugTraceSettings2D>(),
+            Arcane::Settings<Arcane::PhysicsDebugColorSettings2D>(),
+            Arcane::Settings<Arcane::PhysicsDebugStyleSettings2D>(), geo);
+        const std::string header = "arcane-physics-v1-inspector 1 step -1 emphasis 1 thickness none fixtureA "
+            + Hex16(PackFixture(fa)) + " fixtureB " + Hex16(PackFixture(fb));
+        return DumpGeometry(header, geo);
+    }
+
+    std::string DumpV1Pick(Arcane::Runtime& rt)
+    {
+        std::vector<Arcane::PickDrawable> drawables;
+        Arcane::CollectPickables(rt.Registry(), drawables);
+        std::string out = "arcane-physics-v1-pick 1\n";
+        for (const auto& d : drawables)
+        {
+            const std::string who = std::to_string(d.entity.GetID()) + " " + std::to_string(d.entity.GetVersion());
+            const std::string c = Hex8(d.center.x) + " " + Hex8(d.center.y) + " " + Hex8(d.center.z);
+            switch (d.kind)
+            {
+            case Arcane::PickDrawable::Kind::Circle:
+                out += "circle " + who + " " + c + " " + Hex8(d.radius) + " " + Hex8(d.angle) + "\n"; break;
+            case Arcane::PickDrawable::Kind::Capsule:
+                out += "capsule " + who + " " + c + " " + Hex8(d.halfLen) + " " + Hex8(d.radius) + " " + Hex8(d.angle) + "\n"; break;
+            case Arcane::PickDrawable::Kind::Box:
+                out += "box " + who + " " + c + " " + Hex8(d.halfExtents.x) + " " + Hex8(d.halfExtents.y) + " " + Hex8(d.angle) + "\n"; break;
+            default:
+                FAIL("unexpected Quad or Mesh pick drawable in the v1 physics scene");
+            }
+        }
+        return out;
+    }
+
+    namespace
+    {
+        // Rebuild the scene and run the 120 steps; returns the scene.
+        V1PhysicsScene StepScene(Arcane::Runtime& rt)
+        {
+            const V1PhysicsScene scene = BuildV1PhysicsScene(rt.Registry());
+            rt.EnsurePhysics();
+            (void)WriteV1StepTrace(rt, 120);
+            return scene;
+        }
+    }
 }
 
 using namespace Arcane::Test;
@@ -222,6 +366,46 @@ TEST_CASE("v1 step trace matches the checked-in bytes", "[physics][baseline]")
     CHECK(live == disk);
 }
 
+TEST_CASE("v1 whole-world debug matches the checked-in bytes", "[physics][baseline]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const auto scene = StepScene(rt);
+    CompareSnapshot("v1-debug-wholeworld", DumpV1Debug(rt, scene, V1DebugView::WholeWorld));
+}
+
+TEST_CASE("v1 selected-only debug matches the checked-in bytes", "[physics][baseline]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const auto scene = StepScene(rt);
+    CompareSnapshot("v1-debug-selected", DumpV1Debug(rt, scene, V1DebugView::SelectedOnly));
+}
+
+TEST_CASE("v1 alt-view debug matches the checked-in bytes", "[physics][baseline]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const auto scene = StepScene(rt);
+    CompareSnapshot("v1-debug-altview", DumpV1Debug(rt, scene, V1DebugView::AltView));
+
+    const auto dir = RepoRoot() / "Tests/ArcaneTests/data/physics";
+    const auto whole = ReadFileBinary(dir / "v1-debug-wholeworld.txt");
+    const auto alt = ReadFileBinary(dir / "v1-debug-altview.txt");
+    CHECK(whole != alt);
+}
+
+TEST_CASE("v1 inspector overlay matches the checked-in bytes", "[physics][baseline]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const auto scene = StepScene(rt);
+    CompareSnapshot("v1-inspector", DumpV1Inspector(rt, scene));
+}
+
+TEST_CASE("v1 collider pick matches the checked-in bytes", "[physics][baseline]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    StepScene(rt);
+    CompareSnapshot("v1-pick", DumpV1Pick(rt));
+}
+
 TEST_CASE("capture v1 step trace", "[.][physics-baseline]")
 {
     if (!CaptureArmed()) return;
@@ -230,4 +414,16 @@ TEST_CASE("capture v1 step trace", "[.][physics-baseline]")
     rt.EnsurePhysics();
     const std::string live = WriteV1StepTrace(rt, 120);
     WriteSnapshot("v1-step-trace", live);
+}
+
+TEST_CASE("capture v1 debug and pick snapshots", "[.][physics-baseline]")
+{
+    if (!CaptureArmed()) return;
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const auto scene = StepScene(rt);
+    WriteSnapshot("v1-debug-wholeworld", DumpV1Debug(rt, scene, V1DebugView::WholeWorld));
+    WriteSnapshot("v1-debug-selected", DumpV1Debug(rt, scene, V1DebugView::SelectedOnly));
+    WriteSnapshot("v1-debug-altview", DumpV1Debug(rt, scene, V1DebugView::AltView));
+    WriteSnapshot("v1-inspector", DumpV1Inspector(rt, scene));
+    WriteSnapshot("v1-pick", DumpV1Pick(rt));
 }
