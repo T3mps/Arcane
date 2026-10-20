@@ -378,11 +378,15 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
     for (std::size_t i = 0; i < argv.size(); ++i) {
         if (argv[i] == "--remote") {
             hasRemote = true;
-        } else if (argv[i] == "--client") {
+        } else if (argv[i] == "--client" || argv[i].starts_with("--client=")) {
             hasClient = true;
             // M1 (B7 fix round 1): a host --client that differs from servitor's
             // own would hide the host from a later `quit --client <servitor's>`.
-            if (opt.clientSet && (i + 1 >= argv.size() || argv[i + 1] != opt.client)) {
+            // Cli takes --client=NAME too (final fix pass, b7 m4).
+            const bool joined = argv[i] != "--client";
+            const bool same = joined ? argv[i].substr(std::string_view("--client=").size()) == opt.client
+                                     : i + 1 < argv.size() && argv[i + 1] == opt.client;
+            if (opt.clientSet && !same) {
                 if (error != nullptr)
                     *error = Arcane::Remote::MakeError("", "arg.invalid",
                                                        "--client is given both to servitor (" + opt.client +

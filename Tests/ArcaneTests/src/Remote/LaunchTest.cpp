@@ -410,6 +410,18 @@ TEST_CASE("omitted --client is not forwarded to the host, and an explicit one is
     CHECK_FALSE(plan.has_value());
     REQUIRE_FALSE(err.errors.empty());
     CHECK(err.errors.front().code == "arg.invalid");
+    // Final fix pass (b7 m4): the --client=NAME spelling goes through the same check.
+    const std::vector<std::string> ownClientEq = {"--client=mine"};
+    err = {};
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, ownClientEq, &err);
+    CHECK_FALSE(plan.has_value());
+    REQUIRE_FALSE(err.errors.empty());
+    CHECK(err.errors.front().code == "arg.invalid");
+    const std::vector<std::string> sameClientEq = {"--client=grok-review-r1"};
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, sameClientEq, &err);
+    REQUIRE(plan.has_value());
+    CHECK(std::count_if(plan->argv.begin(), plan->argv.end(),
+                        [](const std::string& a) { return a == "--client" || a.starts_with("--client="); }) == 1);
     // The same name typed twice is not doubled; without servitor's --client, the host's own is kept.
     const std::vector<std::string> sameClientArgs = {"--client", "grok-review-r1"};
     plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, sameClientArgs, &err);
