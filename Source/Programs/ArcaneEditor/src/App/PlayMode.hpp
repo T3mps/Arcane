@@ -113,7 +113,15 @@ namespace Arcane::Editor
         // editor's world to Standalone, restores the snapshot via the SAME path Play
         // used (plugin LoadState or Runtime::RestoreRegistry), then re-pauses the
         // RunLoop. No-op success if already stopped (Edit).
+        //
+        // FALSE (the restore failed) STAYS IN PLAY: Mode() is still Play, the snapshot
+        // is kept, the paused flag is set, and a second Stop retries. Callers that go on
+        // to write or swap the scene must check it.
         bool Stop(Arcane::Runtime& runtime, Arcane::PluginHost* host = nullptr);
+
+        // Test seam: the NEXT Stop's restore fails (one shot, cleared by that Stop).
+        // editor.play.failnextrestore arms it for Servitor.
+        void FailNextRestoreForTesting() noexcept { m_failNextRestore = true; }
 
         // The embedded DedicatedServer world while playing EmbeddedServer, else null.
         // Non-owning view of an optional this object owns -- never outlives Stop().
@@ -137,6 +145,7 @@ namespace Arcane::Editor
         EditorMode              m_mode = EditorMode::Edit;
         std::vector<std::byte>  m_snapshot;
         bool                    m_usedPlugin = false;   // which path Play used; Stop matches it
+        bool                    m_failNextRestore = false;   // FailNextRestoreForTesting
 
         PlayTopology            m_topology = PlayTopology::Standalone;
         // The embedded DedicatedServer world and the registry-only seed it was

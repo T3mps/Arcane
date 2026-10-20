@@ -23,6 +23,7 @@
 #include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
 #include "Remote/ModalProbeCommand.hpp"   // editor.modal.probe (review fix round 1, Task 5)
 #include "Remote/GizmoProbeCommand.hpp"   // editor.gizmo.probe (Task 6)
+#include "Remote/PlayRestoreProbeCommand.hpp"   // editor.play.failnextrestore (Task 7)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
@@ -2145,6 +2146,9 @@ namespace Arcane::Editor
         // and lets the frame's else-branch abandon it.
         Arcane::Editor::SetGizmoProbeApp(this);
         Arcane::Editor::RegisterGizmoProbeCommand();
+        // editor.play.failnextrestore: makes the next Stop's restore fail once.
+        Arcane::Editor::SetPlayRestoreProbeApp(this);
+        Arcane::Editor::RegisterPlayRestoreProbeCommand();
     }
 #endif
 
@@ -3974,6 +3978,15 @@ namespace Arcane::Editor
         m_assetModel.Select(created);
     }
 
+    void EditorApp::PushPlayStopFailedModal()
+    {
+        ARC_ERROR("Play mode could not be stopped: the edit snapshot failed to restore; the editor stays in Play");
+        m_modalErrors.Push("Stop Failed",
+                           "Play mode could not be stopped: the edit snapshot failed to restore.\n"
+                           "The editor stays in Play and nothing was saved or replaced. "
+                           "Stop again to retry the restore.");
+    }
+
 #if !defined(ARC_BUILD_DIST)
     // editor.modal.probe's only touch points (Remote/ModalProbeCommand.cpp). The
     // probe is the sole caller; each runs inside DrainFrame, before DrawModals.
@@ -3984,6 +3997,7 @@ namespace Arcane::Editor
         return m_createDialog.open;
     }
     void EditorApp::DismissModalProbe() { m_modalErrors.Pop(); }
+    void EditorApp::ArmFailNextRestore() { m_play.FailNextRestoreForTesting(); }
     Arcane::Editor::ModalKind EditorApp::ModalProbeKind() const noexcept { return m_modalDrawn; }
 
     // editor.gizmo.probe's only touch point. Mirrors the press path of
@@ -4166,30 +4180,41 @@ namespace Arcane::Editor
                     // LaunchStandalone only reaches here already saved-or-dirty,
                     // never mid-Play in a way DoLaunchStandalone itself needs.
                     const bool wasPlaying = InPlayMode();
-                    if (wasPlaying)
-                        m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
-                    AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
-                    m_serverProcess.Stop();   // the session's other half, unconditionally; no-op otherwise
-                    if (m_scene.Path().empty())
+                    const bool stopFailed =
+                        wasPlaying && !m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
+                    if (stopFailed)
                     {
-                        // Never saved: this needs a filename first. The intent
-                        // stays parked and this popup stays up until the dialog
-                        // resolves, so cancelling the dialog cancels only the
-                        // save, not the action behind it.
-                        ShowSceneSaveDialog();
-                    }
-                    else if (DoSaveScene(m_scene.Path()))
-                    {
-                        ls.sceneAction = m_scene.TakePending();
-                        ImGui::CloseCurrentPopup();
+                        // The restore failed and Play stays: the registry is NOT the
+                        // authored scene, so saving now would write play-time state.
+                        // Abort the save and the action behind it: the intent stays
+                        // parked, and the error modal wins the gate next frame.
+                        PushPlayStopFailedModal();
                     }
                     else
                     {
-                        // The save failed (m_modalErrors carries why). Drop the
-                        // action rather than proceed -- proceeding would discard
-                        // exactly the work the save was meant to preserve.
-                        m_scene.ClearPending();
-                        ImGui::CloseCurrentPopup();
+                        AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
+                        m_serverProcess.Stop();   // the session's other half, unconditionally; no-op otherwise
+                        if (m_scene.Path().empty())
+                        {
+                            // Never saved: this needs a filename first. The intent
+                            // stays parked and this popup stays up until the dialog
+                            // resolves, so cancelling the dialog cancels only the
+                            // save, not the action behind it.
+                            ShowSceneSaveDialog();
+                        }
+                        else if (DoSaveScene(m_scene.Path()))
+                        {
+                            ls.sceneAction = m_scene.TakePending();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        else
+                        {
+                            // The save failed (m_modalErrors carries why). Drop the
+                            // action rather than proceed -- proceeding would discard
+                            // exactly the work the save was meant to preserve.
+                            m_scene.ClearPending();
+                            ImGui::CloseCurrentPopup();
+                        }
                     }
                 }
                 // Discard: hidden for a launch -- the standalone runtime reads
@@ -5029,7 +5054,10 @@ namespace Arcane::Editor
             // Clear in the same EndFrame, before any undo can run: no command's
             // destructor calls module code (spec s3.3f, verdict CONFIRMED).
             const std::uint32_t generation = m_plugin->Generation();
-            m_plugin->Poll();
+            // Not during Play: a hot reload would swap the module over a registry that
+            // still holds play-time state and the open edit snapshot (a failed Stop
+            // leaves Play sticky). StartModuleRebuild already refuses in Play.
+            if (!InPlayMode()) m_plugin->Poll();
             if (m_undo && m_plugin->Generation() != generation)
                 Arcane::Editor::ClearHistoryForModuleReload(*m_undo, m_scene);
         }

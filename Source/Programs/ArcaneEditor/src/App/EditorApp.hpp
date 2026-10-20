@@ -162,6 +162,7 @@ namespace Arcane::Editor
         bool                      ArmModalProbe();          // queue an error + open the create dialog; true when the dialog opened
         void                      DismissModalProbe();      // the error modal's OK pop
         [[nodiscard]] Arcane::Editor::ModalKind ModalProbeKind() const noexcept;   // the last DrawModals winner
+        void                      ArmFailNextRestore();   // PlaySession::FailNextRestoreForTesting (editor.play.failnextrestore)
         bool                      ArmGizmoAbandonProbe();   // arm a two-target drag, delete one target; the frame's else-branch abandons it
 #endif
 
@@ -2291,7 +2292,12 @@ namespace Arcane::Editor
 
         // Editor state naming entities of the OUTGOING scene, torn down before any
         // registry swap. Shared by SwitchProject and the scene effects below.
-        void ClearSceneReferences(std::string reason);
+        // False = Play is still running because Stop's restore failed (PlaySession::Stop):
+        // NOTHING was cleared, a "could not be stopped" modal is queued, and the caller
+        // must not replace or write the scene.
+        [[nodiscard]] bool ClearSceneReferences(std::string reason);
+        // The one modal for a failed Stop (Save button, ClearSceneReferences, SwitchProject).
+        void PushPlayStopFailedModal();
         // Saved/UndoCache follows the project (spec s3.3, R12): wipe the
         // outgoing dir, wipe the incoming one (crash leftovers), retarget the
         // stack. Null = no project = memory-only.

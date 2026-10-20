@@ -2200,7 +2200,11 @@ namespace Arcane::Editor
         if (m_resolver)
             m_resolver->Clear();
         m_consoleDiag.store.ClearAll();
-        ClearSceneReferences("Switched project");
+        // SwitchProject stops Play BEFORE this teardown (a Stop that fails refuses the
+        // switch with the session untouched), so Play is never running here and the
+        // clear cannot refuse.
+        if (!ClearSceneReferences("Switched project"))
+            ARC_ERROR("ResetPerProjectState: Play was still running at teardown; the scene references were NOT cleared");
         RetargetUndoCache(nullptr);   // the outgoing project's UndoCache, now that its steps are gone
         if (m_undo) m_scene.Reset(*m_undo);
         m_recents.scenes = {};
@@ -2457,6 +2461,20 @@ namespace Arcane::Editor
             Arcane::Editor::SettingsHostOnProjectSwitch(
                 Arcane::Editor::ProjectSwitchPreTeardown::StageTableMismatch);
             return;
+        }
+
+        // A live Play session is stopped BEFORE anything is torn down. Stop restores
+        // the pre-Play snapshot; when that fails the session stays in Play and the
+        // switch is refused with everything untouched, so the teardown below never
+        // runs over play-time state (ClearSceneReferences would refuse mid-teardown).
+        if (InPlayMode())
+        {
+            if (!m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr))
+            {
+                PushPlayStopFailedModal();
+                return;   // a refused switch leaves the settings host untouched, like the refusals above
+            }
+            AfterPlayFlip(true);   // the one flip rule (EditorApp.hpp)
         }
 
         // Settings arc S3-13: pending edits belong to the OUTGOING project's
