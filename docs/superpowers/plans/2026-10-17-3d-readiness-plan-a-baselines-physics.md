@@ -4,6 +4,8 @@
 
 **Execution gates (re-vet 2026-10-19).** Tasks 1-7 run now. Task 8 waits for fix-round Tasks 11-12 on main. Run each plan's Servitor sequence once on an unmodified base build first.
 
+Amended 2026-10-20 from arcane-research/box3d/2026-10-20-seam-check.md (Box3D seam check: Q1, Q2, and Q3's hook order).
+
 **Goal:** Check in the physics and `.arcart` baselines from this HEAD, move the 2D sim body into one translation unit, then register 2D physics through a solver-free hook so Engine and Render no longer include Manifold.
 
 **Architecture:** Tasks 1–3 only add checked-in bytes and the tests that compare them. Task 4 moves `PhysicsSystem2D::operator()` into `PhysicsSystem.cpp` and leaves behaviour alone. Tasks 5–8 are coupling 3.1: the component header moves to ArcaneScene, `PhysicsBodyRef2D::handle` becomes the packed `uint64`, Extract asks Physics2D through solver-free proxies, and a `SimHook` recorded at image load (the same shape as `ModuleAttach`, not `SystemFactoryTable`) is what Runtime calls. The step trace from Task 1 is compared again after Task 4 and again after Task 8. It must be bit-identical both times.
@@ -821,7 +823,7 @@ with the trailer. Stage `AbiVersion.hpp` only if that is where `kGamePluginABIDi
 - Create: `Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsQuery.cpp` (the function-pointer slot and the forwarders)
 - Create: `Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsQuery.cpp` (the gather implementation and the registrar)
 - Modify: `Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsDebugGeometry.hpp` (move lines 78–94 out; include `PhysicsQuery.hpp`)
-- Test: `Tests/ArcaneTests/src/PhysicsQueryBaselineTest.cpp` (new)
+- Test: `Tests/ArcaneTests/src/PhysicsQueryBaselineTest.cpp` (new), including the case "a second 2D query registration is refused"
 - Do not modify `ExtractFrame.cpp` in this task.
 
 **Interfaces:**
@@ -831,7 +833,7 @@ with the trailer. Stage `AbiVersion.hpp` only if that is where `kGamePluginABIDi
 ```cpp
 namespace Arcane
 {
-    struct PhysicsDebugExtractRequest
+    struct PhysicsDebugExtractRequest2D
     {
         glm::uvec2 viewport{0u, 0u};
         std::optional<Affine2D> view;
@@ -846,7 +848,7 @@ namespace Arcane
         std::optional<float> inspectorEmphasis;
     };
 
-    struct PhysicsColliderSilhouette
+    struct PhysicsColliderSilhouette2D
     {
         Arcane::Entity entity{};
         enum class Kind : std::uint8_t { Circle, Capsule, Box };
@@ -877,36 +879,36 @@ namespace Arcane
         std::vector<PhysicsDebugPrimitive> primitives;
     };
 
-    using PhysicsDebugFillFn =
-        PhysicsDebugGeometry (*)(const Astra::Registry&, const PhysicsDebugExtractRequest&);
-    using PhysicsSilhouetteFillFn =
-        void (*)(const Astra::Registry&, std::vector<PhysicsColliderSilhouette>&);
+    using PhysicsDebugFillFn2D =
+        PhysicsDebugGeometry (*)(const Astra::Registry&, const PhysicsDebugExtractRequest2D&);
+    using PhysicsSilhouetteFillFn2D =
+        void (*)(const Astra::Registry&, std::vector<PhysicsColliderSilhouette2D>&);
 
-    ARC_SCENE_API void SetPhysicsQueryFns(PhysicsDebugFillFn debug, PhysicsSilhouetteFillFn silhouettes) noexcept;
-    ARC_SCENE_API PhysicsDebugGeometry FillPhysicsDebug(
-        const Astra::Registry& reg, const PhysicsDebugExtractRequest& request);
-    ARC_SCENE_API void FillColliderSilhouettes(
-        const Astra::Registry& reg, std::vector<PhysicsColliderSilhouette>& out);
+    [[nodiscard]] ARC_SCENE_API bool SetPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept;
+    ARC_SCENE_API PhysicsDebugGeometry FillPhysicsDebug2D(const Astra::Registry& reg, const PhysicsDebugExtractRequest2D& request);
+    ARC_SCENE_API void FillColliderSilhouettes2D(const Astra::Registry& reg, std::vector<PhysicsColliderSilhouette2D>& out);
 }
 ```
 
 `PhysicsDebugPrimitive` and `class PhysicsDebugGeometry` move verbatim from `PhysicsDebugGeometry.hpp:78-94`. `PhysicsDebugGeometry.hpp` includes `PhysicsQuery.hpp` and deletes those two definitions. The gather functions stay where they are and still return `PhysicsDebugGeometry`. `PhysicsQuery.hpp` does not include `PhysicsDebugGeometry.hpp`.
 
-`Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsQuery.cpp` stores the two pointers. `FillPhysicsDebug` returns a default `PhysicsDebugGeometry` when the debug pointer is null. `FillColliderSilhouettes` returns without writing when the silhouette pointer is null. `SetPhysicsQueryFns` assigns both.
+The suffix names the dimension. D5 adds a `...3D` set beside it and never calls the 2D setter. `SetPhysicsQueryFns2D` stores the pair and returns true when both slots are null or already hold this pair. When a different non-null pair is stored, it keeps that pair, logs one error, and returns false. The Physics2D registrar casts the result to void with a comment that the test pins the refusal. `PhysicsDebugPrimitive` and `PhysicsDebugGeometry` keep their names.
 
-`Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsQuery.cpp` defines the two targets and a namespace-scope registrar, the same shape as `ARC_MODULE_ATTACH` (`ModuleAttach.hpp:18-27`): a struct in an anonymous namespace whose constructor calls `SetPhysicsQueryFns`, and a namespace-scope instance of that struct. Not a function-local static. A function-local static is not initialized unless something calls the function, and this plan gives no such call. The targets are not exported. The test does not call `SetPhysicsQueryFns`. This registrar does not read `ARCANE_TEST_NO_PHYSICS_HOOK` (that flag is Task 8's component hook only). The targets may include Manifold headers. The Scene cpp may not. `modules.lua:544-549` drops an unreferenced import; once `ArcanePhysics2D` is linked, this namespace-scope initializer runs at load. Empty geometry on the v1 scene after 120 steps is a failure: it means the registrar did not run.
+`Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsQuery.cpp` stores the two pointers. `FillPhysicsDebug2D` returns a default `PhysicsDebugGeometry` when the debug pointer is null. `FillColliderSilhouettes2D` returns without writing when the silhouette pointer is null. `SetPhysicsQueryFns2D` assigns both.
+
+`Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsQuery.cpp` defines the two targets and a namespace-scope registrar, the same shape as `ARC_MODULE_ATTACH` (`ModuleAttach.hpp:18-27`): a struct in an anonymous namespace whose constructor calls `SetPhysicsQueryFns2D`, and a namespace-scope instance of that struct. Not a function-local static. A function-local static is not initialized unless something calls the function, and this plan gives no such call. The targets are not exported. The test calls `SetPhysicsQueryFns2D` only in the refusal case. This registrar does not read `ARCANE_TEST_NO_PHYSICS_HOOK` (that flag is Task 8's component hook only). The targets may include Manifold headers. The Scene cpp may not. `modules.lua:544-549` drops an unreferenced import; once `ArcanePhysics2D` is linked, this namespace-scope initializer runs at load. Empty geometry on the v1 scene after 120 steps is a failure: it means the registrar did not run.
 
 - If `request.view` is nullopt, return an empty geometry. This is the perspective skip (`ExtractFrame.cpp:446-447`).
 - Otherwise build `PhysicsDebugDrawOptions2D` the way `ExtractFrame.cpp:433-462` does: `opts.view = *request.view`, `opts.alpha = request.alpha`, `opts.contacts = request.physicsWholeWorld`, `opts.onlyBody` from the selected entity via the entity map (packed `uint64`, which is now `ref.handle`). Apply today's draw gate: if not whole-world and (`playMode` or no body resolved), return empty before the ordinary gather.
 - Ordinary path: `GatherPhysicsDebug`.
 - If both inspector fixture optionals are set: `DebugCollide` into a local `NarrowphaseTrace`, then `GatherNarrowphaseWorldOverlay` with `request.inspectorStepIndex`, `*request.view`, `request.inspectorThickness`, `request.inspectorEmphasis`, and append those primitives. The trace does not leave this cpp.
-- `FillColliderSilhouettes` copies the collider pass `CollectPickables` builds (`ExtractFrame.cpp:176` onward, solver via `Access` at 193–195), into `PhysicsColliderSilhouette`. Same scale (`appliedScale`) and same pose reads. Do not simplify that math. Append; do not clear `out` first (same contract as `CollectPickables`).
+- `FillColliderSilhouettes2D` copies the collider pass `CollectPickables` builds (`ExtractFrame.cpp:176` onward, solver via `Access` at 193–195), into `PhysicsColliderSilhouette2D`. Same scale (`appliedScale`) and same pose reads. Do not simplify that math. Append; do not clear `out` first (same contract as `CollectPickables`).
 
 `Kind::Line` stores thickness in `size`. `Kind::Circle` stores radius in `size` and the center in `a`. That is `PhysicsDebugGeometry::Line` / `Circle` (`PhysicsDebugGeometry.hpp:89-92` before the move). There is no second primitive type.
 
 - [ ] **Step 1: Write the failing proxy tests**
 
-`PhysicsQueryBaselineTest.cpp` includes `Tests/ArcaneTests/src/Helpers/PhysicsV1Baseline.hpp` (Task 1). It does not paste `BuildV1PhysicsScene`. It builds that scene, steps 120, and calls `FillPhysicsDebug` three times (whole-world, selected, alt) plus one inspector request whose packed fixture ids are parsed from the `fixtureA` / `fixtureB` header of `v1-inspector.txt`. Each result dumped with Task 2's line format equals the checked-in file. A fourth call with `view = nullopt` returns zero primitives. `FillColliderSilhouettes` dumped with Task 2's pick format equals `v1-pick.txt`. The test does not call `SetPhysicsQueryFns`.
+`PhysicsQueryBaselineTest.cpp` includes `Tests/ArcaneTests/src/Helpers/PhysicsV1Baseline.hpp` (Task 1). It does not paste `BuildV1PhysicsScene`. It builds that scene, steps 120, and calls `FillPhysicsDebug2D` three times (whole-world, selected, alt) plus one inspector request whose packed fixture ids are parsed from the `fixtureA` / `fixtureB` header of `v1-inspector.txt`. Each result dumped with Task 2's line format equals the checked-in file. A fourth call with `view = nullopt` returns zero primitives. `FillColliderSilhouettes2D` dumped with Task 2's pick format equals `v1-pick.txt`. The test calls `SetPhysicsQueryFns2D` only in the refusal case.
 
 ```cpp
 TEST_CASE("two debug requests do not share one list", "[physics][proxy]")
@@ -915,8 +917,8 @@ TEST_CASE("two debug requests do not share one list", "[physics][proxy]")
     BuildV1PhysicsScene(*rt.Registry());
     for (int i = 0; i < 120; ++i)
         rt.Loop().Advance(1.0 / 60.0, [](double) {}, [](double, double) {});
-    const std::string whole = DumpPhysicsDebug(FillPhysicsDebug(*rt.Registry(), WholeWorldRequest()));
-    const std::string alt = DumpPhysicsDebug(FillPhysicsDebug(*rt.Registry(), AltViewRequest()));
+    const std::string whole = DumpPhysicsDebug(FillPhysicsDebug2D(*rt.Registry(), WholeWorldRequest()));
+    const std::string alt = DumpPhysicsDebug(FillPhysicsDebug2D(*rt.Registry(), AltViewRequest()));
     CHECK(whole == ReadFileBinary(Arcane::Test::RepoRoot() / "Tests/ArcaneTests/data/physics/v1-debug-wholeworld.txt"));
     CHECK(alt == ReadFileBinary(Arcane::Test::RepoRoot() / "Tests/ArcaneTests/data/physics/v1-debug-altview.txt"));
     CHECK(whole != alt);
@@ -924,11 +926,26 @@ TEST_CASE("two debug requests do not share one list", "[physics][proxy]")
 }
 ```
 
-`BuildV1PhysicsScene(Arcane::Registry&)` is the Task 1 declaration. `DumpPhysicsDebug` is the dumper Task 2 declared in the same header (the line format above). `WholeWorldRequest` and `AltViewRequest` are local to this test and fill `PhysicsDebugExtractRequest` with the affines and flags Task 2 used to write those two files. Selected, inspector, null view, and pick are further `TEST_CASE`s in this file with the same shape: call the proxy, compare to the checked-in file, and fail on empty output. Do not invent a second scene builder.
+```cpp
+TEST_CASE("a second 2D query registration is refused", "[physics][proxy]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    BuildV1PhysicsScene(*rt.Registry());
+    for (int i = 0; i < 120; ++i)
+        rt.Loop().Advance(1.0 / 60.0, [](double) {}, [](double, double) {});
+    constexpr Arcane::PhysicsDebugFillFn2D fake =
+        [](const Astra::Registry&, const Arcane::PhysicsDebugExtractRequest2D&) { return Arcane::PhysicsDebugGeometry{}; };
+    CHECK_FALSE(Arcane::SetPhysicsQueryFns2D(fake, nullptr));
+    CHECK(DumpPhysicsDebug(Arcane::FillPhysicsDebug2D(*rt.Registry(), WholeWorldRequest())) ==
+          ReadFileBinary(Arcane::Test::RepoRoot() / "Tests/ArcaneTests/data/physics/v1-debug-wholeworld.txt"));
+}
+```
+
+`BuildV1PhysicsScene(Arcane::Registry&)` is the Task 1 declaration. `DumpPhysicsDebug` is the dumper Task 2 declared in the same header (the line format above). `WholeWorldRequest` and `AltViewRequest` are local to this test and fill `PhysicsDebugExtractRequest2D` with the affines and flags Task 2 used to write those two files. Selected, inspector, null view, and pick are further `TEST_CASE`s in this file with the same shape: call the proxy, compare to the checked-in file, and fail on empty output. Do not invent a second scene builder.
 
 - [ ] **Step 2: Build, then stop on the compile error**
 
-Desk build. Expected: `ExitCode` is non-zero. `logs\build-tests.log` names `FillPhysicsDebug` as undeclared. Do not run `ArcaneTests.exe`. That compile error is the red. It is not an assertion, and it is not a missing-file failure from the previous exe.
+Desk build. Expected: `ExitCode` is non-zero. `logs\build-tests.log` names `FillPhysicsDebug2D` as undeclared. Do not run `ArcaneTests.exe`. That compile error is the red. It is not an assertion, and it is not a missing-file failure from the previous exe.
 
 - [ ] **Step 3: Implement the cpp**
 
@@ -976,14 +993,14 @@ with the trailer.
 - Modify: `Source/Client/ArcaneRender/ArcaneRender.arcmodule` (remove `ArcanePhysics2D` from the public list; line 8 today)
 - Create: `Tests/ArcaneTests/src/Helpers/PhysicsDebugDrawSolver.hpp` (test wrappers that keep today's `DrawPhysicsDebug` / `DrawNarrowphaseWorldOverlay` calls)
 - Modify: `Tests/ArcaneTests/src/RenderInterpolationTest.cpp`, `PhysicsDebugTransformTest.cpp`, `PhysicsDebugCapsuleTest.cpp`, `PhysicsDebugRichTest.cpp`, `SweepPhysicsDebugTest.cpp` (include the helper)
-- Modify: `Source/Client/ArcaneRender/src/Arcane/Render/PickEmit.hpp:6` so the comment says the walk lives in `ExtractFrame.cpp:137`, and collider pass 2 calls `FillColliderSilhouettes`.
+- Modify: `Source/Client/ArcaneRender/src/Arcane/Render/PickEmit.hpp:6` so the comment says the walk lives in `ExtractFrame.cpp:137`, and collider pass 2 calls `FillColliderSilhouettes2D`.
 - Test: the Task 2 compare cases still pass, now through Extract's request builder, plus a source scan.
 
 **Interfaces:**
-- Consumes: `FillPhysicsDebug` and `FillColliderSilhouettes` from Task 6. `PhysicsDebugGeometry`.
+- Consumes: `FillPhysicsDebug2D` and `FillColliderSilhouettes2D` from Task 6. `PhysicsDebugGeometry`.
 - Produces: `ExtractFrame.cpp` includes `PhysicsQuery.hpp` and does not include `Physics2DDetail.hpp`, `Physics2DHandles.hpp`, `PhysicsSystem.hpp`, or any `Manifold2D/` header. Collider silhouettes become `PickDrawable` inside Extract (Render already owns `PickDrawable`). Debug primitives are copied into the overlay with the same `Line` / `Circle` loop. No function declared in a Render header takes a `PhysicsWorld` or a `NarrowphaseTrace`.
 
-`DrawPhysicsDebug` and `DrawNarrowphaseWorldOverlay` are Render functions today (`PhysicsDebugDraw.hpp:110` and `:139`, bodies at `PhysicsDebugDraw.cpp:32` and `:39`). They call `GatherPhysicsDebug` / `GatherNarrowphaseWorldOverlay`, which are `ARC_PHYSICS2D_API`. Leaving those calls in the Render cpp after this task drops the module edge is an unresolved import. Extract does not call them. It calls `FillPhysicsDebug` and `PaintPhysicsDebug`.
+`DrawPhysicsDebug` and `DrawNarrowphaseWorldOverlay` are Render functions today (`PhysicsDebugDraw.hpp:110` and `:139`, bodies at `PhysicsDebugDraw.cpp:32` and `:39`). They call `GatherPhysicsDebug` / `GatherNarrowphaseWorldOverlay`, which are `ARC_PHYSICS2D_API`. Leaving those calls in the Render cpp after this task drops the module edge is an unresolved import. Extract does not call them. It calls `FillPhysicsDebug2D` and `PaintPhysicsDebug`.
 
 `PaintPhysicsDebug` is today's `DrawGeometry` (`PhysicsDebugDraw.cpp:21-30`) exported:
 
@@ -1002,7 +1019,7 @@ Do these moves before deleting the arcmodule edge. Dropping the edge while the i
 
 After the move, `PhysicsDebugDraw.hpp` includes `PhysicsDebugDrawOptions.hpp` and `PhysicsQuery.hpp` and does not include `PhysicsDebugGeometry.hpp`. `PhysicsDebugSettings.hpp` keeps its include; the file it names now lives in ArcaneScene. Gather functions stay in Physics2D.
 
-Build `PhysicsDebugExtractRequest` from the existing `ExtractRequest` fields (`physicsDebug`, the sprite view's `Affine2D`, `RenderContext2D` alpha or 0, selected entity, `physicsWholeWorld`, `playMode`). Inspector fields stay empty on this path unless `ExtractRequest` already carries them. Do not add an editor inspector UI. The inspector snapshot is pinned by calling `FillPhysicsDebug` directly in Task 6; Extract's production path is the ordinary debug path.
+Build `PhysicsDebugExtractRequest2D` from the existing `ExtractRequest` fields (`physicsDebug`, the sprite view's `Affine2D`, `RenderContext2D` alpha or 0, selected entity, `physicsWholeWorld`, `playMode`). Inspector fields stay empty on this path unless `ExtractRequest` already carries them. Do not add an editor inspector UI. The inspector snapshot is pinned by calling `FillPhysicsDebug2D` directly in Task 6; Extract's production path is the ordinary debug path.
 
 After this task `ArcaneRender.arcmodule` has no `ArcanePhysics2D` edge. A private edge is not a substitute (the spec's L13 note: a private edge is still copied onto consumer include paths).
 
@@ -1053,9 +1070,9 @@ Expected: assertion failure, not a compile error. The log names `ExtractFrame.cp
 
 Move `PhysicsDebugTypes.hpp` and `PhysicsDebugDrawOptions2D` as the Interfaces section says, and point `PhysicsDebugDraw.hpp` at the Scene headers, before removing the edge.
 
-Replace the `Access::Solver` collider walk with `FillColliderSilhouettes`, then convert each `PhysicsColliderSilhouette` into the `PickDrawable` the rest of the function already pushes. Keep sprite pass 1 untouched.
+Replace the `Access::Solver` collider walk with `FillColliderSilhouettes2D`, then convert each `PhysicsColliderSilhouette2D` into the `PickDrawable` the rest of the function already pushes. Keep sprite pass 1 untouched.
 
-Replace the debug block with one `FillPhysicsDebug` call and `PaintPhysicsDebug` on that geometry. Delete the Manifold includes and the `Access::Solver` reads in `ExtractFrame.cpp`. Remove `ArcanePhysics2D` from `ArcaneRender.arcmodule`. Desk build so the link fails if a TU still calls `GatherPhysicsDebug` or `DrawPhysicsDebug` from a Render object file. Fix includes until it links. Do not add the edge back. The test helper is the only remaining caller of the gather functions outside ArcanePhysics2D and the solver tests.
+Replace the debug block with one `FillPhysicsDebug2D` call and `PaintPhysicsDebug` on that geometry. Delete the Manifold includes and the `Access::Solver` reads in `ExtractFrame.cpp`. Remove `ArcanePhysics2D` from `ArcaneRender.arcmodule`. Desk build so the link fails if a TU still calls `GatherPhysicsDebug` or `DrawPhysicsDebug` from a Render object file. Fix includes until it links. Do not add the edge back. The test helper is the only remaining caller of the gather functions outside ArcanePhysics2D and the solver tests.
 
 - [ ] **Step 4: Scan, baselines, suite**
 
@@ -1099,6 +1116,9 @@ with the trailer.
 - Create: `Source/Runtime/ArcaneCore/src/Arcane/Sim/SimHook.cpp`
 - Create: `Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/Physics2DSimHook.cpp`
 - Modify: `ProcessContext.cpp`, `ProcessContext::Create`, between `AttachAllModules` and `PrewarmEngineResourceTypes` (lines 30-34 on `a12f33e6`; fix Task 12 edits this file, so re-find both calls)
+- Create: `Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsGravity2D.hpp` and `PhysicsGravity2D.cpp` (`ARC_SCENE_API glm::vec2 ResolveGravity2D(const Astra::Registry&)`: the body of `Runtime.cpp:618-626`, moved verbatim)
+- Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Base/Runtime.cpp:618-626` (`ResolvedGravity` forwards to `ResolveGravity2D`) and `:8` (drop the `Physics2DBinding.hpp` include if nothing else uses it)
+- Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Base/Runtime.hpp:389-393` (comment only: the resolution lives in `ResolveGravity2D`; the declaration at `:394` does not change)
 - Modify: `Tests/ArcaneTests/src/MacroPrefixGuardTest.cpp` `kEnvNames`: add `"ARCANE_TEST_NO_PHYSICS_HOOK"` (`Physics2DSimHook.cpp` and `PhysicsHookBootTest.cpp` read it).
 - Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Base/Runtime.cpp` (roster 326, frame begin 370–376, `InstallEngineSystems` 606–611, `EnsurePhysics` 628–655, `PhysicsEditPass` 657–661, `ResetPhysics` 663–672)
 - Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Scene/EngineRoster.hpp:23` and `:32-37` (drop the three physics types)
@@ -1112,7 +1132,7 @@ with the trailer.
 - Modify: `fuzz/scene_fuzz.cpp:42` so it still calls `RegisterPhysicsComponents2D` (the function remains)
 - Modify: `Source/Programs/ArcaneServer/src/ServerReport.hpp`, `ServerReport.cpp`, and `ServerApp.cpp` (additive `hasPhysicsWorld`; `kSchemaVersion` stays 1)
 - Modify: `Tests/ArcaneTests/src/ServerWitnessTest.cpp:40` and `:48` (schema stays 1; assert `hasPhysicsWorld`)
-- Test: `Tests/ArcaneTests/src/PhysicsHookBootTest.cpp` (new). It includes `Helpers/PhysicsV1Baseline.hpp`.
+- Test: `Tests/ArcaneTests/src/PhysicsHookBootTest.cpp` (new), adding "EnsureWorld resolves its own gravity and Engine passes none", "ResetWorld removes the world and the interp buffer it minted", "SimHooks run in SimHook::order". It includes `Helpers/PhysicsV1Baseline.hpp`.
 
 **Interfaces:**
 - Consumes: `RegisterModuleAttach` shape (`ModuleAttach.hpp:13-27`). `SystemFactoryTable::Add` drops entries when no owner is open (`SystemFactory.hpp:127-131`). Do not use it for this hook. `ComponentID` is `uint16_t` (`ThirdParty/Astra/include/Astra/Component/Component.hpp:13`), so `TypeID<WorldBounds>::Value() + 1` is a valid id.
@@ -1123,12 +1143,12 @@ namespace Arcane
 {
     struct SimHook
     {
+        std::uint32_t order = 0; // ascending; RegisterComponents runs in this order, so component ids do not depend on DLL load order
         void (*Prewarm)() noexcept = nullptr;
         void (*RegisterComponents)(Astra::ComponentRegistry&) noexcept = nullptr;
         void (*InstallSystems)(Astra::SystemScheduler& fixed, float fixedDt) noexcept = nullptr;
         void (*FrameBegin)(Astra::Registry&) noexcept = nullptr;
-        void (*EnsureWorld)(Astra::Registry&, float gravityX, float gravityY,
-                            Mosaic::IWorkScheduler* scheduler) noexcept = nullptr;
+        void (*EnsureWorld)(Astra::Registry&, Mosaic::IWorkScheduler* scheduler) noexcept = nullptr;
         void (*EditPass)(Astra::Registry&, float fixedDt) noexcept = nullptr;
         void (*ResetWorld)(Astra::Registry&) noexcept = nullptr;
         void (*ReplaceFixedRate)(Astra::SystemScheduler& fixed, float fixedDt) noexcept = nullptr;
@@ -1140,6 +1160,8 @@ namespace Arcane
 }
 ```
 
+`RegisterSimHook` inserts in ascending `order`. Equal orders keep registration order. `ReplaceSimHooksForTest` sorts the same way. Physics2D registers `order = 100`. D5's 3D hook takes `200`.
+
 `ResetWorld` is on this same record because `ResetPhysics` (`Runtime.cpp:663-672`) names `PhysicsWorld2D`. It is not a second registration mechanism. The spec's three roles are prewarm, component registration, and systems; `EnsureWorld`, `EditPass`, `FrameBegin`, and `ResetWorld` are the system-side calls Runtime already makes.
 
 Physics2D's static registrar (in `Physics2DSimHook.cpp`) registers one hook unless `ARCANE_TEST_NO_PHYSICS_HOOK=1`. The hook functions:
@@ -1148,9 +1170,9 @@ Physics2D's static registrar (in `Physics2DSimHook.cpp`) registers one hook unle
 - `RegisterComponents`: `RegisterPhysicsComponents2D(creg);`
 - `InstallSystems`: if `!fixed.HasSystem<PhysicsSystem2D>()`, `fixed.AddSystem<PhysicsSystem2D>(fixedDt, true);`
 - `FrameBegin`: if `PhysicsWorld2D* res = reg.GetResource<PhysicsWorld2D>()`, `res->BeginFrame();`
-- `EnsureWorld`: the body of `EnsurePhysics` from line 632 down, but gravity comes from the arguments. `ToWorldDef` stays in this TU. `SetExecutor(scheduler)` only when `Settings<PhysicsWorldSettings2D>().parallelSolver` is true. The hook does not construct a `JobSystem`. `scheduler` is the work scheduler `EnsurePhysics` passes to `SetExecutor` in the tree you start from (after fix Task 12, the process `JobSystem`'s scheduler), including when the flag is false (the hook decides).
+- `EnsureWorld`: the body of `EnsurePhysics` from line 631 down, with `const glm::vec2 g = ResolveGravity2D(reg);` in place of `ResolvedGravity()`. Engine passes no gravity. `ToWorldDef` stays in this TU. `SetExecutor(scheduler)` only when `Settings<PhysicsWorldSettings2D>().parallelSolver` is true. The hook does not construct a `JobSystem`. `scheduler` is the work scheduler `EnsurePhysics` passes to `SetExecutor` in the tree you start from (after fix Task 12, the process `JobSystem`'s scheduler), including when the flag is false (the hook decides).
 - `EditPass`: `PhysicsSystem2D{fixedDt, false}(reg);`
-- `ResetWorld`: `reg.RemoveResource<PhysicsWorld2D>();` only. The caller still removes `PhysicsInterpBuffer2D` (that type is Scene-owned, `SceneCacheRecords.hpp`).
+- `ResetWorld`: `reg.RemoveResource<PhysicsWorld2D>(); reg.RemoveResource<PhysicsInterpBuffer2D>();` The hook removes the pair its `EnsureWorld` mints.
 - `ReplaceFixedRate`: `fixed.RemoveSystem<PhysicsSystem2D>()` then `fixed.AddSystem<PhysicsSystem2D>(fixedDt, true)`. This is what `Runtime::SetFixedHz` does today by name (`Runtime.cpp:444-455`): it stores the new `fixedHz`, calls `loop->SetFixedHz`, then `RemoveSystem<PhysicsSystem2D>()` and `InstallEngineSystems()`. `InstallEngineSystems` (`Runtime.cpp:590-616`) only `AddSystem`s when `!HasSystem`, and the system stores `m_fixedDt` privately (`Physics2DWorld.hpp:113-120`) and steps `world.Step(m_fixedDt)`. After this task `SetFixedHz` updates `loopCfg` and the loop, then calls every hook's `ReplaceFixedRate(fixedUpdate, static_cast<float>(1.0 / hz))`. It does not name `PhysicsSystem2D`. It does not need a second `InstallEngineSystems` call to refresh that one system. `SweepSimTest.cpp:187-208` stays green.
 
 Server report, additive. `kSchemaVersion` stays 1 (`ServerReport.hpp:26`). `ServerWitnessTest.cpp:40` keeps `schemaVersion == 1`. Add `bool hasPhysicsWorld = false` next to `hasPhysics` (`ServerReport.hpp:51`). `ToJson` adds `"hasPhysicsWorld"` inside the `systems` object (`ServerReport.cpp:29-34`). `ServerApp.cpp` sets it from `GetResource<PhysicsWorld2D>() != nullptr` after the tick that calls `EnsurePhysics` (`ServerApp.cpp:279` is the tick; `hasPhysics` at line 332 stays `HasSystem` and is not the world check). `ServerWitnessTest` asserts `systems.hasPhysicsWorld == true` on the `--frames 30` run. An absent field or `false` fails. Do not bump the schema.
@@ -1161,9 +1183,9 @@ Call sites:
 - `Runtime` ctor, immediately after `RegisterRoster` (line 326), on the `ComponentRegistry` (the `Registry` does not exist yet; it is created at line 328): each hook's `RegisterComponents`. A secondary world that shares the registry runs the same function. `ClearSystems` does not call it.
 - `InstallEngineSystems`: delete the `PhysicsSystem2D` block (lines 607–611) and call each hook's `InstallSystems(fixed, fixedDt)` in that slot, before transform propagation. `PhysicsSystem2D` still declares `Before<TransformPropagationSystem>`.
 - Frame-begin lambda (lines 373–376): call each hook's `FrameBegin` instead of naming `PhysicsWorld2D`.
-- `EnsurePhysics`: keep `ResolvedGravity()` in Engine. Call `EnsureWorld(*registry, g.x, g.y, that same scheduler)`. Then `SetResource(PhysicsInterpBuffer2D{})` stays in Engine when the hook minted a world. The simplest split: `EnsureWorld` does the world mint **and** the interp-buffer set, because both are today's pair (`Runtime.cpp:653-654`) and the interp buffer type is already Scene-owned so Physics2D may set it (Physics2D depends on Scene). Engine's `EnsurePhysics` becomes the gravity resolve plus the hook call. Engine does not mention `Manifold2D`, `Access`, or `ToWorldDef`.
+- `EnsurePhysics`: Engine resolves no gravity. For each hook, `EnsureWorld(*registry, that same scheduler)`. `Runtime::ResolvedGravity` stays public (`Runtime.hpp:394`, `ClientRuntime.hpp:172`, the tests at `RuntimeTest.cpp:217-230`, `SweepSimTest.cpp:192`, `SweepProjectStoresTest.cpp:103`) and returns `ResolveGravity2D(*registry)`. The hook and the query read one function. Engine does not mention `Manifold2D`, `Access`, or `ToWorldDef`.
 - `PhysicsEditPass`: hook `EditPass` only.
-- `ResetPhysics`: hook `ResetWorld`, then `RemoveResource<PhysicsInterpBuffer2D>()` in Engine.
+- `ResetPhysics`: each hook's `ResetWorld`. Engine names no interp buffer.
 
 `EngineComponentRoster` becomes the ten scene types, ending at `WorldBounds`. Add `PhysicsComponentRoster2D` in `PhysicsComponents.hpp`:
 
@@ -1281,6 +1303,12 @@ Sixth test: after `EnsurePhysics` and one `Advance`, `GetResource<PhysicsWorld2D
 
 Fourth test: the same walk of the spelling-guard's `kGameFacingHeaders` fails if a **public declaration** line names `Manifold2D`. Reuse `Scan` from `ArcaneSpellingGuardTest.cpp` (`ScanMode::PublicDeclarations`). A comment or an `ARC_INTERNAL` fence does not count. Calling the existing scan function is required if it is in the same test binary; if it is in an anonymous namespace, duplicate the mode rules in this test (comments, strings, preprocessor lines, and `ARC_INTERNAL` fences stripped) and add one self-check: a fixture string `"Manifold2D::Vec2 x;"` hits, and `"// Manifold2D"` does not.
 
+Seventh test, in the same file, "EnsureWorld resolves its own gravity and Engine passes none": build the v1 scene, then set the scene-root `PhysicsSettings2D::gravity = {0, 2}` (the `RuntimeTest.cpp:222-230` shape). Copy `SimHooks()`, append a recording hook (`order = 300`; `EnsureWorld = [](Astra::Registry&, Mosaic::IWorkScheduler*) noexcept { ++g_calls; }`), and `ReplaceSimHooksForTest`. Then `EnsurePhysics`, then one `Advance`. `CHECK(g_calls == 1)`, and a dynamic body's `velocity.y > 0`. Restore the saved hooks.
+
+Eighth test, "ResetWorld removes the world and the interp buffer it minted": after `EnsurePhysics`, `REQUIRE` both the `PhysicsWorld2D` and `PhysicsInterpBuffer2D` resources. After `ResetPhysics`, `CHECK` both are null. After a second `EnsurePhysics`, both are present.
+
+Ninth test, "SimHooks run in SimHook::order": save the hooks, `ReplaceSimHooksForTest({order 300, order 100})`, `CHECK(SimHooks()[0].order == 100)`, then restore.
+
 - [ ] **Step 2: Build, then stop on the compile error**
 
 The id case calls `Arcane::SimHooks()` before it reads component ids, and the Hz case calls `SetFixedHz` only after it has named `ReplaceFixedRate` through a hook the test installs with `ReplaceSimHooksForTest`. Those two symbols do not exist yet. Desk build. Expected: `ExitCode` is non-zero. `logs\build-tests.log` names `SimHooks` or `ReplaceSimHooksForTest` as undeclared. Do not run `ArcaneTests.exe`. That compile error is the red. The id numbers are already true today via `EngineComponentRoster`, so an id-only test would pass and is not the red. After the implementation the parent passes and the child exits non-zero.
@@ -1289,7 +1317,7 @@ The id case calls `Arcane::SimHooks()` before it reads component ids, and the Hz
 
 Write `SimHook.hpp` / `.cpp` and `Physics2DSimHook.cpp`. Rewire `Runtime.cpp` and `ProcessContext.cpp`. Split the roster. Drop the module edges. Add the linked names. Update `NamespaceFacadeTest` and the `ProcessContextTest` comment. `RuntimeEngineSystemsTest.cpp:69-80` keeps including a header that declares `PhysicsSystem2D` (`PhysicsSystem2D.hpp`) and drops its Manifold include if it has one (`PhysicsWorld.hpp` at line 23 of that file today). The `HasSystem<PhysicsSystem2D>` checks stay.
 
-`Runtime.cpp` after this task contains none of the strings `Manifold2D`, `PhysicsSystem2D`, `PhysicsWorld2D`, `Physics2DDetail`. Add that as a `CHECK` on the file text in `PhysicsHookBootTest.cpp`.
+`Runtime.cpp` after this task contains none of the strings `Manifold2D`, `PhysicsSystem2D`, `PhysicsWorld2D`, `PhysicsInterpBuffer2D`, `Physics2DDetail`. Reword the comment at `Runtime.cpp:552` so it no longer names the type. Add that as a `CHECK` on the file text in `PhysicsHookBootTest.cpp`.
 
 - [ ] **Step 4: Build, tests, Servitor, golden gate**
 
@@ -1298,6 +1326,9 @@ Desk build. Expected: exit 0.
 ```powershell
 .\ArcaneTests.exe "physics component ids are the three integers after WorldBounds" --rng-seed 1
 .\ArcaneTests.exe "BeginFrame clears frameEvents and leaves stepEvents until the next step" --rng-seed 1
+.\ArcaneTests.exe "EnsureWorld resolves its own gravity and Engine passes none" --rng-seed 1
+.\ArcaneTests.exe "ResetWorld removes the world and the interp buffer it minted" --rng-seed 1
+.\ArcaneTests.exe "SimHooks run in SimHook::order" --rng-seed 1
 .\ArcaneTests.exe "v1 step trace matches the checked-in bytes" --rng-seed 1
 .\ArcaneTests.exe "Runtime installs the engine's standard systems and reinstalls them after ClearSystems" --rng-seed 1
 ```

@@ -109,6 +109,8 @@ The module applies that request inside its own translation unit. Ordinary debug 
 
 `Access` stays for the physics module's own translation units and for tests that are explicitly checking the solver. Its header is no longer reachable from Engine, Render, the editor, or the server.
 
+**Amendment 2026-10-20 (Box3D seam check).** In code the request, silhouette, setter and forwarders carry a `2D` suffix (`PhysicsDebugExtractRequest2D`, `FillPhysicsDebug2D`, ...). A 3D world adds a sibling set. `PhysicsDebugGeometry` keeps its name.
+
 **B. A virtual `IPhysicsQuery` in Core.** Render and Engine call one interface. Manifold2D and, later, Box3D implement it. This removes the friend struct. It also builds the "one solver" façade the 2026-09-14 ruling rejects: 2D queries (fixture silhouettes, planar angle, Z kept from the transform) and 3D queries (hulls, capsules, full quaternions) do not share a useful method set. A fat interface either grows 2D forever or forces the 3D world through 2D types. Virtual dispatch on the pick path is a new ABI surface for a problem the interp buffer already solved with a resource.
 
 **C. Narrow exported functions, Render still links Physics2D.** Replace `Access::Solver` with `BodyPose(entity)` and `ForEachFixture` exported from the physics DLL. Engine still calls `EnsurePhysics` implemented in the physics DLL. This deletes the friend struct and is a smaller edit. Render's module edge remains, `DrawPhysicsDebug` still wants a world object or a new parameter list, and Box3D still cannot join the fixed update without an Engine edit. It misses the target the scorecard set: Render and Engine see physics only through proxies and registered systems.
