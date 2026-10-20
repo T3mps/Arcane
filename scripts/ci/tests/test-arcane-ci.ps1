@@ -165,6 +165,9 @@ try {
     Check 'result: tests that never ran fail the leg' ((-not $none.Passed) -and $none.Tests -eq 'tests did not run')
     $tf = New-LegResult -Run $run -Status ([ordered]@{ build = 0; 'tests-7' = 1 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
     Check 'result: test failure' ((-not $tf.Passed) -and $tf.Tests -like 'seed 7: FAILED (1)*')
+    Put (Join-Path $leg 'tests-seed8.log') "build output only, no catch2 summary`n"
+    $nosum = New-LegResult -Run $run -Status ([ordered]@{ build = 0; 'tests-8' = 0 }) -OutDir $leg -Seeds @('8') -Image 'build-x'
+    Check 'result: a seed with no Catch2 summary fails the leg' (-not $nosum.Passed)
     $ce = New-LegResult -Run $run -Status ([ordered]@{ container = 125 }) -OutDir $leg -Seeds @('7') -Image 'build-x'
     Check 'result: container never built' ((-not $ce.Passed) -and $ce.Build -like 'not run (container exit 125*')
     $dk = New-LegResult -Run $run -Status ([ordered]@{ docker = 1 }) -OutDir $leg -Seeds @('7') -Image 'build-x'

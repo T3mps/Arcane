@@ -339,6 +339,7 @@ function New-LegResult {
             $desc = $parts -join ', '
         } else {
             $desc = 'no Catch2 summary in the log'
+            $passed = $false   # a seed that printed no summary proved nothing
         }
         if ([int]$Status[$key] -ne 0) { $passed = $false; $desc = "FAILED ($($Status[$key])): $desc" }
         $tests.Add("seed ${s}: $desc")
