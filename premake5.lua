@@ -723,7 +723,12 @@ project "arcane-abi-digest"
 -- TU per macro bakes that variant's mix; the exe prints `name hex` per variant
 -- and AbiDigestTest.cpp requires base == the real mix (a comment moves
 -- nothing) and every mutant != base. An anchor that no longer matches fails
--- the generate loudly: update the anchor, never the test.
+-- the generate loudly: update the anchor, never the test. The shadows are
+-- written at GENERATE time: after editing any shadowed header, re-run premake
+-- (re-run premake: the shadow headers are stale otherwise, and the mutation
+-- case fails with base != the real mix). ClientRuntime.hpp and
+-- RuntimePresentation.hpp are shadowed too (a pointer before m_pres, an int
+-- before gameInput).
 -- ============================================================================
 local function abi_shadow(rel, edits)
     local src = path.join(_MAIN_SCRIPT_DIR, rel)
@@ -741,6 +746,14 @@ end
 abi_shadow("Source/Runtime/ArcaneEngine/src/Arcane/Base/ProcessContext.hpp", {
     { "std::unique_ptr<::Arcane::TypeContext> m_owned;",
       "// abi mutant: a comment-only line, must not move the digest\n#ifdef ABI_MUT_PROCESS_PRIVATE\n        int m_abiProbe = 0;\n#endif\n        std::unique_ptr<::Arcane::TypeContext> m_owned;" },
+})
+abi_shadow("Source/Client/ArcaneClient/src/Arcane/Client/ClientRuntime.hpp", {
+    { "RuntimePresentation m_pres;",
+      "#ifdef ABI_MUT_CLIENT_PRIVATE\n        void* m_abiProbe = nullptr;\n#endif\n        RuntimePresentation m_pres;" },
+})
+abi_shadow("Source/Client/ArcaneClient/src/Arcane/Client/RuntimePresentation.hpp", {
+    { "LocalInputUser         gameInput;",
+      "#ifdef ABI_MUT_PRES_GAMEINPUT\n        int abiProbe = 0;\n#endif\n        LocalInputUser         gameInput;" },
 })
 abi_shadow("Source/Runtime/ArcaneCore/src/Arcane/Math/Aabb.hpp", {
     { "glm::vec3 min{0.0f, 0.0f, 0.0f};",

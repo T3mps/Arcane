@@ -73,6 +73,8 @@ namespace
         "Source/Runtime/ArcaneCore/src/Arcane/Guid.hpp",
         "Source/Runtime/ArcaneCore/src/Arcane/Math/Aabb.hpp",
         "Source/Runtime/ArcaneScene/src/Arcane/Scene/ViewTransform.hpp",
+        "Source/Client/ArcaneInput/src/Arcane/Input/InputSnapshot.hpp",
+        "Source/Client/ArcaneClient/src/Arcane/Client/RuntimePresentation.hpp",
         "Source/Runtime/ArcaneAssets/src/Arcane/Mesh/MeshAsset.hpp",
         "Source/Runtime/ArcaneAssets/src/Arcane/Mesh/MeshBuilder.hpp",
     };
@@ -479,12 +481,18 @@ TEST_CASE("a mutated listed header moves the abi digest, a comment in it does no
         const auto sp = line.find(' ');
         if (sp != std::string::npos) mix[line.substr(0, sp)] = line.substr(sp + 1);
     }
-    REQUIRE(mix.size() == 4);
+    REQUIRE(mix.size() == 6);
     // The shadow copies are the real headers plus a comment: the same mix.
+    INFO("re-run premake: the shadow headers are stale (they are written at generate time; "
+         "a listed header changed since)");
     CHECK(mix["base"] == Hex16(Arcane::AbiManifestMix()));
     CHECK(mix["process-private"] != mix["base"]);
     CHECK(mix["aabb-swap"] != mix["base"]);
     CHECK(mix["view-swap"] != mix["base"]);
+    // ClientRuntime: a pointer before m_pres moves m_pres's offset; an int before
+    // RuntimePresentation::gameInput moves gameInput's (inline GameInput() reads it).
+    CHECK(mix["client-private"] != mix["base"]);
+    CHECK(mix["pres-gameinput"] != mix["base"]);
 }
 
 TEST_CASE("every public struct field is in the abi manifest", "[plugin][abi]")
@@ -529,6 +537,81 @@ TEST_CASE("every public struct field is in the abi manifest", "[plugin][abi]")
         }
     }
     CHECK(scanned > 100);   // the walk must actually have seen the fields
+
+    // The transitive records (kAbiFieldTypeHeaders) too, for every type the manifest
+    // roots: a field added to Aabb, ViewTransform, MeshSection ... without an entry
+    // does not move the digest otherwise (spec 3.4). A type with no root is the
+    // by-value-record case's business, not this one's.
+    std::size_t transitive = 0;
+    for (const char* header : kAbiFieldTypeHeaders)
+    {
+        INFO(header);
+        for (const ScannedType& t : ScanTypes(ReadFileBinary(root / header)))
+        {
+            if (!ManifestHasRoot(manifest, t.name)) continue;
+            for (const std::string& field : t.Checked())
+            {
+                ++transitive;
+                INFO(t.name << "::" << field);
+                CHECK(ManifestHasOffsetof(manifest, t.name, field));
+            }
+        }
+    }
+    CHECK(transitive > 15);
+}
+
+TEST_CASE("a private data member is hashed or allow-listed", "[plugin][abi]")
+{
+    // Game code compiles inline accessors that read private members, so a class with
+    // private data must befriend the manifest's Access (and be recorded), unless it
+    // is listed here with the reason its private state never reaches an inline
+    // game-side reader. Empty on purpose.
+    const std::set<std::string> allowList{};
+    CHECK(ScanTypes("class K { int hidden; };").front().friendAccess == false);
+    const fs::path root = RepoRootDir();
+    std::size_t types = 0;
+    const auto walk = [&](const char* header)
+    {
+        INFO(header);
+        for (const ScannedType& t : ScanTypes(ReadFileBinary(root / header)))
+        {
+            ++types;
+            bool hasPrivate = false;
+            for (const ScannedField& f : t.fields) hasPrivate = hasPrivate || f.priv;
+            if (!hasPrivate || t.friendAccess || allowList.count(t.name) != 0) continue;
+            INFO(t.name << " has private data members and no `friend struct ...Detail::AbiManifest::Access;`");
+            CHECK(false);
+        }
+    };
+    for (const char* header : kAbiHeaders) walk(header);
+    for (const char* header : kAbiFieldTypeHeaders) walk(header);
+    CHECK(types > 60);
+}
+
+TEST_CASE("every manifest accessor record is called", "[plugin][abi]")
+{
+    // Each befriended record's text lives in a `static constexpr void R_<X>(Fnv&)` body
+    // of Access, and AbiManifestMix() must call `Access::R_<X>(f);` exactly once. Delete
+    // a call and the text scans still see the entries while --write re-blesses a digest
+    // that has silently lost the record.
+    const std::string manifest = ManifestCode();
+    REQUIRE_FALSE(manifest.empty());
+    // Calls count only inside AbiManifestMix() (a call from another R_ body is dead code).
+    const auto mixAt = manifest.find("constexpr std::uint64_t AbiManifestMix()");
+    REQUIRE(mixAt != std::string::npos);
+    const std::string mixBody = manifest.substr(mixAt);
+    static const std::regex defRe(R"(static\s+constexpr\s+void\s+(R_\w+)\s*\()");
+    std::size_t defs = 0;
+    for (std::sregex_iterator it(manifest.begin(), manifest.end(), defRe), end; it != end; ++it)
+    {
+        const std::string name = (*it)[1].str();
+        ++defs;
+        INFO(name);
+        const std::regex callRe("Access::" + name + R"(\(\s*f\s*\)\s*;)");
+        const auto calls = std::distance(std::sregex_iterator(mixBody.begin(), mixBody.end(), callRe), std::sregex_iterator());
+        CHECK(calls == 1);
+    }
+    CHECK(defs >= 7);
 }
 
 TEST_CASE("every abi header struct and class is a manifest root", "[plugin][abi]")

@@ -48,6 +48,8 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Client/RuntimePresentation.hpp>
+#include <Arcane/Input/InputSnapshot.hpp>
 #include <Arcane/Physics2D.hpp>
 #include <Arcane/Physics2DFwd.hpp>
 #include <Arcane/Plugin/GameComponents.hpp>
@@ -175,6 +177,16 @@ namespace Arcane
             f.Field("frameEvents", Opaque(offsetof(Arcane::PhysicsWorld2D, frameEvents)), Opaque(sizeof(Arcane::PhysicsWorld2D::frameEvents)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::frameEvents))), "Detail::Physics2D::EventBuffers");
         }
 
+        // ClientRuntime: game code compiles GameInput() { return m_pres.gameInput; }
+        // inline, so m_core's and m_pres's offsets are ABI. m_pres holds a
+        // LocalInputUser (containers), so its size and alignment are Opaque.
+        static constexpr void R_ClientRuntime(Fnv& f) noexcept
+        {
+            f.Type("Arcane::ClientRuntime", Opaque(sizeof(Arcane::ClientRuntime)), Opaque(alignof(Arcane::ClientRuntime)));
+            f.Field("m_core", offsetof(Arcane::ClientRuntime, m_core), sizeof(Arcane::ClientRuntime::m_core), alignof(decltype(Arcane::ClientRuntime::m_core)), "Arcane::Runtime");
+            f.Field("m_pres", offsetof(Arcane::ClientRuntime, m_pres), Opaque(sizeof(Arcane::ClientRuntime::m_pres)), Opaque(alignof(decltype(Arcane::ClientRuntime::m_pres))), "Arcane::RuntimePresentation");
+        }
+
         static constexpr void R_PhysicsSystem2D(Fnv& f) noexcept
         {
             f.Type("Arcane::PhysicsSystem2D", sizeof(Arcane::PhysicsSystem2D), alignof(Arcane::PhysicsSystem2D));
@@ -224,7 +236,33 @@ namespace Arcane
         Detail::AbiManifest::Access::R_GameModule(f);
         Detail::AbiManifest::Access::R_SystemFactoryTable(f);
         Detail::AbiManifest::Access::R_Runtime(f);
-        f.Type("Arcane::ClientRuntime", Opaque(sizeof(Arcane::ClientRuntime)), Opaque(alignof(Arcane::ClientRuntime)));
+        Detail::AbiManifest::Access::R_ClientRuntime(f);
+        f.Type("Arcane::InputSnapshot", sizeof(Arcane::InputSnapshot), alignof(Arcane::InputSnapshot));
+        f.Field("scancodes", offsetof(Arcane::InputSnapshot, scancodes), sizeof(Arcane::InputSnapshot::scancodes), alignof(decltype(Arcane::InputSnapshot::scancodes)), "uint64_t[8]");
+        f.Field("keycodesDown", offsetof(Arcane::InputSnapshot, keycodesDown), sizeof(Arcane::InputSnapshot::keycodesDown), alignof(decltype(Arcane::InputSnapshot::keycodesDown)), "uint32_t[16]");
+        f.Field("keycodeCount", offsetof(Arcane::InputSnapshot, keycodeCount), sizeof(Arcane::InputSnapshot::keycodeCount), alignof(decltype(Arcane::InputSnapshot::keycodeCount)), "uint32_t");
+        f.Field("mouseButtons", offsetof(Arcane::InputSnapshot, mouseButtons), sizeof(Arcane::InputSnapshot::mouseButtons), alignof(decltype(Arcane::InputSnapshot::mouseButtons)), "uint8_t");
+        f.Field("mouseX", offsetof(Arcane::InputSnapshot, mouseX), sizeof(Arcane::InputSnapshot::mouseX), alignof(decltype(Arcane::InputSnapshot::mouseX)), "float");
+        f.Field("mouseY", offsetof(Arcane::InputSnapshot, mouseY), sizeof(Arcane::InputSnapshot::mouseY), alignof(decltype(Arcane::InputSnapshot::mouseY)), "float");
+        f.Field("wheelY", offsetof(Arcane::InputSnapshot, wheelY), sizeof(Arcane::InputSnapshot::wheelY), alignof(decltype(Arcane::InputSnapshot::wheelY)), "float");
+        f.Field("gamepadConnected", offsetof(Arcane::InputSnapshot, gamepadConnected), sizeof(Arcane::InputSnapshot::gamepadConnected), alignof(decltype(Arcane::InputSnapshot::gamepadConnected)), "bool");
+        f.Field("gamepadButtons", offsetof(Arcane::InputSnapshot, gamepadButtons), sizeof(Arcane::InputSnapshot::gamepadButtons), alignof(decltype(Arcane::InputSnapshot::gamepadButtons)), "uint16_t");
+        f.Field("gamepadAxes", offsetof(Arcane::InputSnapshot, gamepadAxes), sizeof(Arcane::InputSnapshot::gamepadAxes), alignof(decltype(Arcane::InputSnapshot::gamepadAxes)), "float[6]");
+        f.Field("wantCaptureKeyboard", offsetof(Arcane::InputSnapshot, wantCaptureKeyboard), sizeof(Arcane::InputSnapshot::wantCaptureKeyboard), alignof(decltype(Arcane::InputSnapshot::wantCaptureKeyboard)), "bool");
+        f.Field("wantCaptureMouse", offsetof(Arcane::InputSnapshot, wantCaptureMouse), sizeof(Arcane::InputSnapshot::wantCaptureMouse), alignof(decltype(Arcane::InputSnapshot::wantCaptureMouse)), "bool");
+        // RuntimePresentation: input is fixed-size, so gameInput's offset (the first
+        // container-holding member's own offset) is real; the sizes and offsets after
+        // it hash as 0 where they depend on LocalInputUser's size.
+        f.Type("Arcane::RuntimePresentation", Opaque(sizeof(Arcane::RuntimePresentation)), Opaque(alignof(Arcane::RuntimePresentation)));
+        f.Field("input", offsetof(Arcane::RuntimePresentation, input), sizeof(Arcane::RuntimePresentation::input), alignof(decltype(Arcane::RuntimePresentation::input)), "InputSnapshot");
+        f.Field("gameInput", offsetof(Arcane::RuntimePresentation, gameInput), Opaque(sizeof(Arcane::RuntimePresentation::gameInput)), Opaque(alignof(decltype(Arcane::RuntimePresentation::gameInput))), "LocalInputUser");
+        f.Field("audioDesc", Opaque(offsetof(Arcane::RuntimePresentation, audioDesc)), sizeof(Arcane::RuntimePresentation::audioDesc), alignof(decltype(Arcane::RuntimePresentation::audioDesc)), "Audio::AudioDeviceDesc");
+        f.Field("audio", Opaque(offsetof(Arcane::RuntimePresentation, audio)), sizeof(Arcane::RuntimePresentation::audio), alignof(decltype(Arcane::RuntimePresentation::audio)), "Audio::AudioDevice");
+        f.Field("view", Opaque(offsetof(Arcane::RuntimePresentation, view)), sizeof(Arcane::RuntimePresentation::view), alignof(decltype(Arcane::RuntimePresentation::view)), "ViewTransform");
+        f.Field("imguiContext", Opaque(offsetof(Arcane::RuntimePresentation, imguiContext)), sizeof(Arcane::RuntimePresentation::imguiContext), alignof(decltype(Arcane::RuntimePresentation::imguiContext)), "void*");
+        f.Field("imguiAlloc", Opaque(offsetof(Arcane::RuntimePresentation, imguiAlloc)), sizeof(Arcane::RuntimePresentation::imguiAlloc), alignof(decltype(Arcane::RuntimePresentation::imguiAlloc)), "void*");
+        f.Field("imguiFree", Opaque(offsetof(Arcane::RuntimePresentation, imguiFree)), sizeof(Arcane::RuntimePresentation::imguiFree), alignof(decltype(Arcane::RuntimePresentation::imguiFree)), "void*");
+        f.Field("imguiUserData", Opaque(offsetof(Arcane::RuntimePresentation, imguiUserData)), sizeof(Arcane::RuntimePresentation::imguiUserData), alignof(decltype(Arcane::RuntimePresentation::imguiUserData)), "void*");
         f.Type("Arcane::EngineContext", sizeof(Arcane::EngineContext), alignof(Arcane::EngineContext));
         f.Field("abiVersion", offsetof(Arcane::EngineContext, abiVersion), sizeof(Arcane::EngineContext::abiVersion), alignof(decltype(Arcane::EngineContext::abiVersion)), "uint32_t");
         f.Field("typeContext", offsetof(Arcane::EngineContext, typeContext), sizeof(Arcane::EngineContext::typeContext), alignof(decltype(Arcane::EngineContext::typeContext)), "Arcane::TypeContext*");

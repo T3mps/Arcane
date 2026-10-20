@@ -8,6 +8,8 @@ namespace AbiMutants
     std::uint64_t MixProcessPrivate() noexcept;
     std::uint64_t MixAabbSwap() noexcept;
     std::uint64_t MixViewSwap() noexcept;
+    std::uint64_t MixClientPrivate() noexcept;
+    std::uint64_t MixPresGameInput() noexcept;
 }
 
 int main()
@@ -17,5 +19,7 @@ int main()
     line("process-private", AbiMutants::MixProcessPrivate());
     line("aabb-swap", AbiMutants::MixAabbSwap());
     line("view-swap", AbiMutants::MixViewSwap());
+    line("client-private", AbiMutants::MixClientPrivate());
+    line("pres-gameinput", AbiMutants::MixPresGameInput());
     return 0;
 }
