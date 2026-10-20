@@ -94,9 +94,9 @@ namespace
             [&](Astra::Entity, const Arcane::Identity& id, const Arcane::PhysicsBodyRef2D& ref)
             {
                 if (id.id != guid || found) return;
-                Arcane::Detail::Physics2D::Access::Solver(*res)->SetPosition(ref.handle, Manifold2D::Physics::Vec2(pos.x, pos.y));
-                Arcane::Detail::Physics2D::Access::Solver(*res)->SetVelocity(ref.handle, Manifold2D::Physics::Vec2(0.0f, 0.0f));
-                Arcane::Detail::Physics2D::Access::Solver(*res)->Wake(ref.handle);
+                Arcane::Detail::Physics2D::Access::Solver(*res)->SetPosition(Arcane::Detail::Physics2D::UnpackBody(ref.handle), Manifold2D::Physics::Vec2(pos.x, pos.y));
+                Arcane::Detail::Physics2D::Access::Solver(*res)->SetVelocity(Arcane::Detail::Physics2D::UnpackBody(ref.handle), Manifold2D::Physics::Vec2(0.0f, 0.0f));
+                Arcane::Detail::Physics2D::Access::Solver(*res)->Wake(Arcane::Detail::Physics2D::UnpackBody(ref.handle));
                 found = true;
             });
         REQUIRE(found);

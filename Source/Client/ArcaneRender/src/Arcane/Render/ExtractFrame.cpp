@@ -198,12 +198,13 @@ namespace Arcane
             auto colliderView = registry.CreateView<const Arcane::Collider2D, const Arcane::PhysicsBodyRef2D>();
             colliderView.ForEach([&](Astra::Entity entity, const Arcane::Collider2D& col, const Arcane::PhysicsBodyRef2D& ref)
             {
-                if (ref.handle == Phys::kInvalidBody) return;
-                if (!world.IsValid(ref.handle))       return;
+                if (ref.handle == 0) return;
+                const Phys::BodyHandle body = Arcane::Detail::Physics2D::UnpackBody(ref.handle);
+                if (!world.IsValid(body))            return;
 
-                const Phys::Vec2 bp = world.Position(ref.handle);
+                const Phys::Vec2 bp = world.Position(body);
                 const glm::vec2  bodyPos(static_cast<float>(bp.x), static_cast<float>(bp.y));
-                const float      bodyAngle = static_cast<float>(world.GetAngle(ref.handle));
+                const float      bodyAngle = static_cast<float>(world.GetAngle(body));
 
                 // The silhouette's world z: the solver is planar, so it comes
                 // from the entity's own WorldTransform (its translation column)

@@ -104,7 +104,7 @@ TEST_CASE("Arcane::PhysicsInterpBuffer2D captures the pre-step pose each fixed s
 
     // Step once: creates the body, captures prev (== the initial pose (0,0)), steps.
     physics(reg);
-    const P::BodyHandle h = reg.GetComponent<Arcane::PhysicsBodyRef2D>(e)->handle;
+    const P::BodyHandle h = Arcane::Detail::Physics2D::UnpackBody(reg.GetComponent<Arcane::PhysicsBodyRef2D>(e)->handle);
     const P::PhysicsWorld& world = *Arcane::Detail::Physics2D::Access::Solver(*reg.GetResource<Arcane::PhysicsWorld2D>());
     const P::Vec2 afterStep1 = world.Position(h);   // pose after step 1
 

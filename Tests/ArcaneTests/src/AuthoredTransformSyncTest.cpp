@@ -603,7 +603,7 @@ TEST_CASE("a fixture-less entity's Arcane::PhysicsBodyRef2D is cleared, never le
     reg.GetComponent<Arcane::Collider2D>(b)->fixtures.clear();
     paused(reg);
     CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).count(b) == 0);
-    CHECK(reg.GetComponent<Arcane::PhysicsBodyRef2D>(b)->handle == Phys::kInvalidBody);   // cleared, not dangling
+    CHECK(reg.GetComponent<Arcane::PhysicsBodyRef2D>(b)->handle == 0u);   // cleared, not dangling
 
     // Any world replacement. A and C re-mint into the fresh world; B has
     // nothing to mint and must not keep a handle the fresh world will reuse.
@@ -614,7 +614,7 @@ TEST_CASE("a fixture-less entity's Arcane::PhysicsBodyRef2D is cleared, never le
     REQUIRE(Arcane::Detail::Physics2D::Access::Entities(*res).count(a) == 1);
     REQUIRE(Arcane::Detail::Physics2D::Access::Entities(*res).count(c) == 1);
     CHECK(Arcane::Detail::Physics2D::Access::Entities(*res).count(b) == 0);
-    CHECK(reg.GetComponent<Arcane::PhysicsBodyRef2D>(b)->handle == Phys::kInvalidBody);
+    CHECK(reg.GetComponent<Arcane::PhysicsBodyRef2D>(b)->handle == 0u);
     CHECK_FALSE(reg.GetComponent<Arcane::PhysicsBodyRef2D>(b)->handle == reg.GetComponent<Arcane::PhysicsBodyRef2D>(c)->handle);
 
     // The consequence that made this a defect: moving B must not move C.
