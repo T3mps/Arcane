@@ -151,8 +151,10 @@ namespace Arcane
         // background texture cook (Arcane::Editor::CookQueue) is the first
         // production consumer. Same instance WorkScheduler()/TaskExecutor()
         // already expose two other faces of; this is the third. Reference,
-        // not pointer: the JobSystem is a fixed part of this Runtime's
-        // substrate and outlives every caller that could hold the reference.
+        // not pointer: the JobSystem is the process pool, owned jointly by the
+        // Runtimes on this ProcessContext (ProcessContext::AcquireJobSystem), so
+        // the reference stays valid as long as any Runtime on that context is
+        // alive -- including after this Runtime is destroyed if a sibling lives.
         JobSystem&                Jobs() noexcept;
         std::shared_ptr<::Arcane::ComponentRegistry> Components() noexcept;
         Assets&                   AssetsFacade() noexcept;

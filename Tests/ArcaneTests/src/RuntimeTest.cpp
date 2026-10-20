@@ -9,6 +9,7 @@
 #include <Arcane/Audio/AudioDevice.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Client/ClientRuntime.hpp>
+#include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Jobs/TaskExecutor.hpp>
 #include <Arcane/Scene/BoundsSystem.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -447,6 +448,21 @@ TEST_CASE("Runtime RestoreRegistry rejects a valid registry blob with a corrupt 
         CHECK(c.value == 42);
     });
     CHECK(seen == 1);
+}
+
+TEST_CASE("two Runtimes share one JobSystem and the survivor can Submit", "[runtime][jobs]")
+{
+    std::atomic<int> n{0};
+    {
+        Arcane::Runtime b(Arcane::Test::Process(), Arcane::NetMode::Standalone);
+        {
+            Arcane::Runtime a(Arcane::Test::Process(), Arcane::NetMode::Standalone);
+            CHECK(&a.Jobs() == &b.Jobs());
+            a.Jobs().Submit([&] { n.fetch_add(1); });
+        }   // a is gone; the pool lives on through b
+        b.Jobs().Submit([&] { n.fetch_add(1); });
+    }       // b's drop is the last: ~JobSystem drains both tasks
+    REQUIRE(n.load() == 2);
 }
 
 // Astra adoption Task 3 (residency, spec s5). The shape that crashed on
