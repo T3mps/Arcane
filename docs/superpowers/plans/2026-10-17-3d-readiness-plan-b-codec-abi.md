@@ -2,19 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Execution gates (re-vet 2026-10-19).** Tasks 1-2 run now. Task 3 waits for fix-round Tasks 2-4 and 9-10 on main. Run each plan's Servitor sequence once on an unmodified base build first.
+
 **Goal:** Gate plugin load on a human epoch plus a compiler-derived digest, then move the `.arcart` byte codec into ArcaneAssets so one version constant and one hash serve the cooker and the runtime.
 
 **Architecture:** Task 1 adds the manifest and `kGamePluginABIDigest` without bumping the epoch, and proves a comment-only edit does not move `build/abi-digest.txt`. Task 2 bumps the epoch once, puts `ABIDigest` on `PluginVTable`, and refuses a mismatch before `Init` on both the loaded-DLL path and the static path. Task 3 moves the codec. The digest tool is not the constants generator (that is Plan C). It runs after headers compile, because it asks the compiler.
 
 **Tech Stack:** C++23, premake5, MSBuild, Catch2 v3, PowerShell, a small C++ manifest TU (not a Lua generator).
 
-**Spec:** `D:/dev/starworks/arcane-readiness/2026-10-17-3d-readiness-arc-design.md`, sections 3.3, 3.4, 4 steps 3 and 6, 7, and decision 5. Line numbers below were checked against `feat/f5-unified-world` at `309aa06e`. After Plan A, re-check any line this plan cites before editing it. Behaviour disagreements stop the task.
+**Spec:** `D:/dev/starworks/arcane-readiness/2026-10-17-3d-readiness-arc-design.md`, sections 3.3, 3.4, 4 steps 3 and 6, 7, and decision 5. Line numbers below were checked at `309aa06e` and re-verified unchanged on `main` `a12f33e6` (2026-10-19). After Plan A, re-check any line this plan cites before editing it. Behaviour disagreements stop the task.
 
 **Prerequisite gate:** Plan A Tasks 1–3 are merged. Tasks 4–8 have not run. `Tests/ArcaneTests/data/artifacts/v1-texture.arcart` and `v1-mesh.arcart` and their `.sha256` siblings exist. `PhysicsSystem2D::operator()` is still the inline body in `PhysicsSystem.hpp`. `PhysicsBodyRef2D::handle` is still `Detail::Physics2D::BodyHandle` (`PhysicsComponents.hpp:101`). Do not require `uint64` here. Task 1's first `build/abi-digest.txt` records that pre-move, pre-`uint64` layout. Plan A Task 4 then runs this plan's `--check` and does not `--write`. Plan A Task 5, which starts only after this plan's Tasks 1 and 2 have merged, changes the field, rebuilds `arcane-abi-digest`, and only then regenerates the digest with `--write`. Do not bump the epoch in a commit that only moves the codec. The one epoch bump is Task 2, because the export set and `PluginVTable` grow.
 
 ## Global Constraints
 
-- **Worktree:** `D:\dev\starworks\Arcane-f5`. Never push, never force-push, never merge to `main`.
+- **Worktree:** `D:\dev\starworks\Arcane-3dr`, branch cut from `main` `a12f33e6`. `Arcane-f5` is the old F5 branch at `309aa06e`; never build or test there. Never push, never force-push, never merge to `main`.
 - **One heavy build at a time across worktrees.** Do not start `build.ps1`, `msbuild`, or `cl.exe` while another worktree on this machine is already compiling. Desk build, from the repo root. Windows PowerShell 5.1 `Start-Process` has no `-Priority`. `-PassThru` returns the process; `PriorityClass` is how 5.1 lowers it. `ExitCode` is the build's code.
 
 ```powershell
@@ -23,8 +25,8 @@ Remove-Item Env:ARCANE_BUILD_MACHINE -ErrorAction SilentlyContinue
 $env:_CL_ = '/MP4'
 $build = Start-Process -FilePath powershell.exe -ArgumentList @(
     '-NoProfile','-ExecutionPolicy','Bypass','-File',
-    'D:\dev\starworks\Arcane-f5\scripts\ci\build.ps1','Debug','-Jobs','4'
-) -WorkingDirectory 'D:\dev\starworks\Arcane-f5' -PassThru -NoNewWindow
+    'D:\dev\starworks\Arcane-3dr\scripts\ci\build.ps1','Debug','-Jobs','4'
+) -WorkingDirectory 'D:\dev\starworks\Arcane-3dr' -PassThru -NoNewWindow
 if (-not $build.HasExited) { $build.PriorityClass = 'BelowNormal' }
 $build.WaitForExit()
 if ($build.ExitCode -ne 0) { throw "desk build failed: exit $($build.ExitCode)" }
@@ -34,15 +36,15 @@ if ($build.ExitCode -ne 0) { throw "desk build failed: exit $($build.ExitCode)" 
 - **Tests** run from the exe directory. Record the seed banner. New cases use `--rng-seed 1`. After any `Set-Location` into `Binaries\Debug-windows-x86_64-md\ArcaneTests`, every script path is root-qualified. Suite gate before every commit:
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
 Never a bare `Arcane::Runtime`; use `Arcane::Test::Process()`.
 - **Red steps.** After writing a new test `.cpp`, run the desk build before `ArcaneTests.exe`. **Compile error:** the build's `ExitCode` is non-zero and `logs\build-tests.log` or `logs\build-engine.log` names the missing declaration. Do not run the previous exe. **Assertion:** the build's `ExitCode` is 0, then the new exe fails a named `CHECK` or `REQUIRE`. Do not write "FAIL, file missing" for a test that calls a symbol that does not exist yet.
-- **D3D12 debug layer.** If `test_main.cpp` contains `ForceD3D12DebugLayerForProcess` (PR #16, on `origin/main`), leave it. This plan adds no GPU behaviour.
+- **D3D12 debug layer.** `test_main.cpp` on main forces it and fails any case that raises `RenderErrorTotal` unless the case is tagged `[expects-render-errors]`. Leave it. This plan adds no GPU behaviour.
 - **No golden re-bless.** Pixels do not depend on the epoch. Do not run `golden-gate.ps1` as a per-task gate. Run it once at the end of Task 3. Expected: 14 lanes, every `diffCount` 0. Delete `imgui.ini` in both host exe dirs first.
-- **Servitor** after Task 2 and after Task 3. Task 1's digest is not visible in a running host until Task 2's load gate refuses a mismatch; Task 1 has no Servitor step for that reason. Binary: `Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe` from this tree. Own `--headless` runtime. `launch` and `status` take no `--client` (they exit 2). Never drive an editor the user has open. Never `--bless`. Quit what you launched, including when a later command fails. Record every exit code. Client name `plan-b`. Exit codes: 0 ok, 4 no host, 5 retry, 6 failed, 7 host died, 8 check failed.
+- **Servitor** after Task 2 and after Task 3. Task 1's digest is not visible in a running host until Task 2's load gate refuses a mismatch; Task 1 has no Servitor step for that reason. Binary: `Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe` from this tree. Own `--headless` runtime. Do not pass `--client` to `launch` or `status`. Main refuses it with exit 2. Fix-round Task 21 makes them accept it. The commands below work either way. Never drive an editor the user has open. Never `--bless`. Quit what you launched, including when a later command fails. Record every exit code. Client name `plan-b`. Exit codes: 0 ok, 4 no host, 5 retry, 6 failed, 7 host died, 8 check failed.
 - **Style:** `/MD`, no `/fp:fast`, ASCII comments, UTF-8 without BOM. Do not edit `ThirdParty/Astra`. The digest reads `ASTRA_ENTITY_BITS`, `ASTRA_ENTITY_VERSION_BITS`, and `ASTRA_MAX_COMPONENTS` as the compiler saw them (`Entity.hpp:149-153` defaults 32 and 8; `Component.hpp:17-18` default `ASTRA_MAX_COMPONENTS` 128). Do not change those defaults.
 - **OpenProject stays a warning.** `Runtime.cpp:822-840` logs and continues. The warning text is lines 837–840. Do not store the digest on the project. Do not make `OpenProject` a refusal. `.arcproj` keeps storing the epoch only.
 - **Every commit message ends with:**
@@ -53,6 +55,8 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
 ```
 
 ### Line drift (re-verify after Plan A)
+
+Re-verified 2026-10-19 on `main` `a12f33e6`: no cited file changed since `309aa06e`.
 
 | Citation | Code at the 2026-10-17 read |
 |---|---|
@@ -70,6 +74,7 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
 | `HashSourceBytes` | Pipeline: `SourceHash.hpp:38` (inline, FNV offset `14695981039346656037`, prime `1099511628211`). Reader: `ArtifactReader.cpp:688` (anonymous namespace). Task 3 leaves one function. |
 | `HotReloadPluginBad` | `Tests/Fixtures/HotReloadPlugin/HotReloadPlugin.cpp:187`, ABI + 999. |
 | Spelling-guard header list | `ArcaneSpellingGuardTest.cpp:34-55`, 21 headers. The member scan walks that list. |
+| Rebase shift (fix Tasks 2-4) | After the rebase over fix Tasks 2-4, these lines move (measured at `751786bd`; Task 9 will move the reader lines again). `ArtifactFormat.cpp`: 14->15, 15->16, 23->24, 685->660. `ArtifactReader.cpp`: 18->20, 27->29, 520->504, 639->623, 688->672, 759->743, 795->779, 858->842. `MeshImporter.cpp`: 520->526, 733->739. Re-grep each line before editing. |
 
 ## Review Focus
 
@@ -136,7 +141,7 @@ namespace Arcane
 The mix is one FNV-1a (offset `14695981039346656037`, prime `1099511628211`) over a stable byte stream:
 
 1. The three defines, each as the ASCII name, a `=`, the decimal value, a newline, in this order: `ASTRA_ENTITY_BITS`, `ASTRA_ENTITY_VERSION_BITS`, `ASTRA_MAX_COMPONENTS`. Read the value with `#ifdef` / the default the header documents. Do not hash a `#define` line of source.
-2. For each root type, in the order listed below: the ASCII type name, newline, then `sizeof` as 4 little-endian bytes, `alignof` as 4 little-endian bytes, then each field in declaration order: field name, newline, `offsetof` as 4 little-endian bytes, the field type's `sizeof` as 4, the field type's `alignof` as 4, the ASCII name of the field's declared type, newline.
+2. For each root type, in the order listed below: the ASCII type name, newline, then `sizeof` as 4 little-endian bytes, `alignof` as 4 little-endian bytes, then each field in declaration order: field name, newline, `offsetof` as 4 little-endian bytes, the field type's `sizeof` as 4, the field type's `alignof` as 4, the ASCII name of the field's declared type, newline. Every type and field name is a string literal written in `AbiManifest.hpp`. Do not derive one from `Astra::TypeID<T>::Name()`. Since Astra `fa5ff853` that is the canonical spelling, and `TypeNameCanonical.hpp` lists data-model-dependent aliases such as `std::int64_t` as still differing across compilers. A derived name would make Linux `build.sh --check` disagree with a Windows `--write`.
 
 Root types (by-value, not behind an opaque pointer). Transitive field types are recorded when the field's declared type is itself a struct in this set, by including that struct as its own record. `Astra::Entity` is in the set because component structs store it.
 
@@ -149,6 +154,8 @@ Start the root list with these, then extend it in this task until the member sca
 The member scan is what makes the list complete. A public struct field whose name does not appear in `AbiManifest.hpp`'s `offsetof` expressions fails the test. Pointer fields and references are recorded as pointer-sized. Arrays are recorded as the array type. Do not skip a field because it looks unused.
 
 `AbiManifest.hpp` includes the headers `kGameFacingHeaders` names when this task runs. It does not add an include of `Physics2DDetail.hpp` or a `Manifold2D/` header of its own. `PhysicsComponents.hpp` still includes `Physics2DHandles.hpp` (`PhysicsComponents.hpp:9`) until Plan A Task 5, and `Physics2DHandles.hpp` is itself one of the 21 (`ArcaneSpellingGuardTest.cpp:55`). That transitive include is expected at this gate. Do not record a Manifold type in the mix. If a public struct field's declared type is a Manifold type, stop and report.
+
+`ProcessContext.hpp` is one of the 21 headers, and fix-round Task 12 changes its private members (`:50-56`). If Task 12 reaches `main` after this task, rebuild `arcane-abi-digest` and run `--check` on the rebased tree. If it fails, `--write` from the rebuilt tool and update `kGamePluginABIDigest` in that rebase commit. Do not bump the epoch.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -391,13 +398,13 @@ The stale-digest DLL is the loaded-DLL proof of a same-epoch wrong value. The in
 Desk build, including the bits-64 fixture, the stale-digest fixture, and ReferenceProject (the `.arcproj` abi must match or the existing project tests fail). Expected: `ExitCode` 0. Then, from the exe directory:
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "a matching epoch with the wrong digest is refused before Init" --rng-seed 1
 .\ArcaneTests.exe "a static table with the wrong digest is refused before Init" --rng-seed 1
 .\ArcaneTests.exe "OpenProject warns and still opens when engineAbi is stale" --rng-seed 1
 .\ArcaneTests.exe "a 64-bit digest DLL and a stale digest DLL are refused before Init" --rng-seed 1
 .\ArcaneTests.exe "abi digest matches build/abi-digest.txt" --rng-seed 1
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
 Expected: PASS, and `run-tests.ps1` exits 0. The existing HotReload bad-plugin case still fails the load (run the test by its current name; do not weaken it). Record each exit code.
@@ -405,7 +412,7 @@ Expected: PASS, and `run-tests.ps1` exits 0. The existing HotReload bad-plugin c
 Servitor:
 
 ```powershell
-$S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$S = 'D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
 & $S --project ReferenceProject launch runtime --headless -- --fixed-time 0
 & $S --project ReferenceProject --client plan-b --host runtime wait settled
 & $S --project ReferenceProject --client plan-b --host runtime quit
@@ -427,6 +434,8 @@ with the trailer. Stage every other `.arcproj` you restamped.
 ---
 
 ### Task 3: One `.arcart` codec in ArcaneAssets
+
+**Prerequisite of this task:** Fix-round Tasks 2, 3, 4, 9 and 10 are on `main`. `ReadFilePrefix` already checks `is_regular_file`, and both IndexData loops already refuse `index >= vertexCount`. The codec keeps both refusals.
 
 **Files:**
 - Create: `Source/Runtime/ArcaneAssets/src/Arcane/Assets/ArtifactCodec.hpp`
@@ -502,7 +511,7 @@ The red case for this task is the version gate, which only reads source text and
 Desk build. The version-gate TU does not call a missing symbol. Expected: `ExitCode` 0. Then, from the exe directory:
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "one kArtifactVersion and one SectionTag" --rng-seed 1
 ```
 
@@ -519,13 +528,13 @@ Keep the existing refusal tests green: truncated body, bad section range, bad `s
 Desk build. Expected: `ExitCode` 0. From the exe directory:
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "one kArtifactVersion and one SectionTag" --rng-seed 1
 .\ArcaneTests.exe "checked-in v1 bytes match a fresh codec write" --rng-seed 1
 .\ArcaneTests.exe "source hash is one function and matches the texture fixture" --rng-seed 1
 .\ArcaneTests.exe "v1 texture and mesh artifacts match the checked-in bytes" --rng-seed 1
 .\ArcaneTests.exe "abi digest matches build/abi-digest.txt" --rng-seed 1
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
 Expected: every case PASS, and `run-tests.ps1` exits 0. The hash case's prototype count is 1 and its definition count is 1.
@@ -533,7 +542,7 @@ Expected: every case PASS, and `run-tests.ps1` exits 0. The hash case's prototyp
 Servitor. `ReadClientArtifact` (`ArtifactReader.cpp:759`) is the runtime reader this task moved. Own headless runtime. `launch` takes no `--client`. Record every exit code. Quit even if a later command fails.
 
 ```powershell
-$S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$S = 'D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
 & $S --project ReferenceProject launch runtime --headless -- --fixed-time 0
 & $S --project ReferenceProject --client plan-b --host runtime wait settled
 & $S --project ReferenceProject --client plan-b --host runtime logs --level error
@@ -545,7 +554,7 @@ Expected: every exit 0. `wait settled` exit 0 means the host booted and loaded t
 Golden gate once, Debug, after deleting both `imgui.ini` files. The script path stays root-qualified:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\golden-gate.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\golden-gate.ps1
 ```
 
 Expected: 14/14, `diffCount` 0. No `--bless`.

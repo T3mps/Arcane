@@ -1,7 +1,7 @@
 # 3D-readiness arc — design
 
 **Status:** design spec, revision 3 after the 2026-10-17 second re-review (NEEDS REVISION, section 3.6). No implementation plan, no code changes. The review log is section 10.
-**Tree:** `D:/dev/starworks/Arcane-f5`, branch `feat/f5-unified-world`, HEAD `309aa06e`. This is the tree main becomes once F5 Plan 1 has merged.
+**Tree:** `D:/dev/starworks/Arcane-3dr`, branch `feat/3d-readiness`, cut from `main` `a12f33e6` (F5 merged as `ab8b7af9`). Measured originally at `feat/f5-unified-world` HEAD `309aa06e`, an ancestor of main.
 **Charter:** the 2026-10-16 scorecard, theme 5. "2D-era couplings tax the 3D north star." None of the six items below is a bug in today's 2D game. Each is a cost that F5 Plans 2 and 3, the Deadlock-class renderer (D1), large-world precision (D17), Astra's 64-bit entity handle (D25), and Box3D (D5) will otherwise pay inside a foundation that is supposed to stay still.
 **Binding north star:** `docs/research/2026-09-14-engine-ceiling-deadlock-and-box3d.md`. The picture is Deadlock / Source 2 the renderer. Nanite, Lumen, and a scene-SDF-first renderer are out. 3D physics is Box3D behind a façade, in its own world, beside Manifold2D. Manifold3D is later and treats Box3D as the oracle. Game modules do not include solver headers. Today's `PhysicsSystem2D` is not taught to be 3D, because it flattens out-of-plane rotation on purpose.
 **F5:** `docs/superpowers/specs/2026-10-09-f5-unified-world-pipeline-design.md`. Plan 1 is in this tree. Plans 2 and 3 run after this arc and build on the seams below. This arc does not implement Plan 2's Surface material or Plan 3's unified world pass.

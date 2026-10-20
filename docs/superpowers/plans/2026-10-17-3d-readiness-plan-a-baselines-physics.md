@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Execution gates (re-vet 2026-10-19).** Tasks 1-7 run now. Task 8 waits for fix-round Tasks 11-12 on main. Run each plan's Servitor sequence once on an unmodified base build first.
+
 **Goal:** Check in the physics and `.arcart` baselines from this HEAD, move the 2D sim body into one translation unit, then register 2D physics through a solver-free hook so Engine and Render no longer include Manifold.
 
 **Architecture:** Tasks 1–3 only add checked-in bytes and the tests that compare them. Task 4 moves `PhysicsSystem2D::operator()` into `PhysicsSystem.cpp` and leaves behaviour alone. Tasks 5–8 are coupling 3.1: the component header moves to ArcaneScene, `PhysicsBodyRef2D::handle` becomes the packed `uint64`, Extract asks Physics2D through solver-free proxies, and a `SimHook` recorded at image load (the same shape as `ModuleAttach`, not `SystemFactoryTable`) is what Runtime calls. The step trace from Task 1 is compared again after Task 4 and again after Task 8. It must be bit-identical both times.
@@ -10,13 +12,13 @@
 
 **Spec:** `D:/dev/starworks/arcane-readiness/2026-10-17-3d-readiness-arc-design.md` (binding, including the Review log through Revision 4). This plan implements section 4 steps 1, 4, and 5, and the Done lists of sections 3.1 and 3.2. Where this plan and the spec disagree on a line number, the line verified below wins. Where they disagree on behaviour, stop and report; do not invent a behaviour.
 
-**Prerequisite gate:** F5 Plan 1 is in this tree (`feat/f5-unified-world`, HEAD `309aa06e`, or `main` after that merges). Do not start until that commit is the parent. `kGamePluginABIVersion` stays whatever `AbiVersion.hpp` contains when you start (61 at the 2026-10-17 read). This plan does not bump it.
+**Prerequisite gate:** F5 Plan 1 is in this tree: the arc branch is cut from `main` at `a12f33e6` or later (F5 merged as `ab8b7af9`, PR #17). Do not start from `feat/f5-unified-world` or the `Arcane-f5` worktree. `kGamePluginABIVersion` stays whatever `AbiVersion.hpp` contains when you start (61 at the 2026-10-17 read). This plan does not bump it.
 
 **Sequencing inside this plan, and against Plan B.** Tasks 1–3 are the baselines. **Stop after Task 3.** Plan B Tasks 1 and 2 (the digest tool, `build/abi-digest.txt`, the one epoch bump, and the load gate) merge next, while `PhysicsSystem2D::operator()` is still the inline body in `PhysicsSystem.hpp` and `PhysicsBodyRef2D::handle` is still `Detail::Physics2D::BodyHandle`. Design section 4 step 3 (the paragraph at design lines 443–444) puts ABI identity before the sim-body move and before the handle change: both are measured against the manifest. Then Task 4. Task 4 does not change a game-facing field's declared type, does not `--write`, and does not change `kGamePluginABIDigest`. Its build runs `arcane-abi-digest --check` and that check exits 0, because the class layout stays `m_fixedDt` then `m_stepWorld`. Then Tasks 5–8. Task 5 changes the field's declared type to `std::uint64_t` and, in that same commit, rebuilds `arcane-abi-digest` against the new header, then runs `--write`, then the full desk build. It sets `kGamePluginABIDigest` to the integer that rebuilt tool printed. It does not bump the epoch (design section 7: coupling 3.1 leaves the epoch; the digest updates). Do not start Task 4 in a tree with no `build/abi-digest.txt`. The trace must still match after Task 4 alone, before any hook edit.
 
 ## Global Constraints
 
-- **Worktree:** `D:\dev\starworks\Arcane-f5`. Never push, never force-push, never merge to `main`. Plans are the files in `D:\dev\starworks\arcane-readiness\`. Do not edit those plan files while implementing.
+- **Worktree:** `D:\dev\starworks\Arcane-3dr`, branch cut from `main` `a12f33e6`. `Arcane-f5` is the old F5 branch at `309aa06e`; never build or test there. Never push, never force-push, never merge to `main`. Plans are the files in `D:\dev\starworks\arcane-readiness\`. Do not edit those plan files while implementing.
 - **One heavy build at a time across worktrees.** Do not start `build.ps1`, `msbuild`, or `cl.exe` while another worktree on this machine is already compiling.
 - **User-at-desk cap.** Unset `CI` and `ARCANE_BUILD_MACHINE` for every local build and test. Compile below normal priority, four MSBuild jobs, `/MP4`:
 
@@ -29,8 +31,8 @@ $env:_CL_ = '/MP4'
 # code. Start-Process itself does not fail when build.ps1 fails.
 $build = Start-Process -FilePath powershell.exe -ArgumentList @(
     '-NoProfile','-ExecutionPolicy','Bypass','-File',
-    'D:\dev\starworks\Arcane-f5\scripts\ci\build.ps1','Debug','-Jobs','4'
-) -WorkingDirectory 'D:\dev\starworks\Arcane-f5' -PassThru -NoNewWindow
+    'D:\dev\starworks\Arcane-3dr\scripts\ci\build.ps1','Debug','-Jobs','4'
+) -WorkingDirectory 'D:\dev\starworks\Arcane-3dr' -PassThru -NoNewWindow
 if (-not $build.HasExited) { $build.PriorityClass = 'BelowNormal' }
 $build.WaitForExit()
 if ($build.ExitCode -ne 0) { throw "desk build failed: exit $($build.ExitCode)" }
@@ -42,19 +44,19 @@ Run that from the repo root. `scripts\ci\build.ps1` is the Windows sequence: gen
 ```powershell
 Remove-Item Env:CI -ErrorAction SilentlyContinue
 Remove-Item Env:ARCANE_BUILD_MACHINE -ErrorAction SilentlyContinue
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
-`run-tests.ps1` pushes to the exe directory (`scripts/run-tests.ps1:66`). After any `Set-Location` into that directory, every script path is root-qualified (`D:\dev\starworks\Arcane-f5\scripts\...`). A relative `.\scripts\...` or `scripts\...` does not exist there. `run-tests.ps1` is `~[gpu]` plus `scripts\check-baselines.ps1`. A count that rises is fine; a drop fails. Never construct a bare `Arcane::Runtime`. Use `Arcane::Runtime rt(Arcane::Test::Process());` (`RuntimeEngineSystemsTest.cpp:71`).
+`run-tests.ps1` pushes to the exe directory (`scripts/run-tests.ps1:66`). After any `Set-Location` into that directory, every script path is root-qualified (`D:\dev\starworks\Arcane-3dr\scripts\...`). A relative `.\scripts\...` or `scripts\...` does not exist there. `run-tests.ps1` is `~[gpu]` plus `scripts\check-baselines.ps1`. A count that rises is fine; a drop fails. Never construct a bare `Arcane::Runtime`. Use `Arcane::Runtime rt(Arcane::Test::Process());` (`RuntimeEngineSystemsTest.cpp:71`).
 
 - **Red steps.** After writing a new test `.cpp`, run the desk build above before `ArcaneTests.exe`. Then say which failure is the red:
   - **Compile error:** the build's `ExitCode` is non-zero and `logs\build-engine.log` or `logs\build-tests.log` names the missing declaration. Do not run the previous exe. That compile error is the red.
   - **Assertion:** the build's `ExitCode` is 0, then the new exe fails the named `CHECK` or `REQUIRE` (a missing checked-in file is this kind only when the test compiled).
   A step that says "FAIL, file missing" without a successful build of the new TU is running the stale binary. Do not write that.
-- **D3D12 debug layer.** `origin/main`'s `Tests/ArcaneTests/src/test_main.cpp` (PR #16) calls `ForceD3D12DebugLayerForProcess` unless `ARCANE_TESTS_NO_D3D12_DEBUG=1`, and a Catch listener can fail the process on `RenderErrorTotal` even when Catch returned 0. This branch's `test_main.cpp` does not have that block yet. If it is present when you execute, do not revert it. GPU work in later plans stays `RenderErrorCount() == 0` with the layer on. This plan's only GPU gate is the golden gate, and it does not re-bless.
+- **D3D12 debug layer.** `Tests/ArcaneTests/src/test_main.cpp` (PR #16, on main) calls `ForceD3D12DebugLayerForProcess` unless `ARCANE_TESTS_NO_D3D12_DEBUG=1`. Its `RenderErrorListener` samples the monotonic `RenderErrorTotal()` around every case and fails a case whose total rose, even when Catch returned 0, unless the case is tagged `[expects-render-errors]`. Do not revert it. Do not set the opt-out. GPU work in later plans stays `RenderErrorCount() == 0` with the layer on. This plan's only GPU gate is the golden gate, and it does not re-bless.
 - **Golden gate** runs once, at the end of Task 8, not after Tasks 1–7. Before it, delete `imgui.ini` in `Binaries\Debug-windows-x86_64-md\ArcaneRuntime` and `Binaries\Debug-windows-x86_64-md\ArcaneEditor`. Expected: `scripts\golden-gate.ps1` reports 14 lanes and every lane `diffCount` 0 (`scripts\golden-gate.ps1:326` is the fourteen-lane comment). This arc does not re-bless.
-- **Servitor** after every task whose change the running host executes: Tasks 4, 5, 7, and 8. Tasks 1–3 only add tests and checked-in bytes. Task 6 adds proxies `ExtractFrame.cpp` does not call yet; the host check for that path is Task 7. Binary: `Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe`, built from this tree. Launch your own `--headless` host. `launch` and `status` take no `--client` (they exit 2). Never drive an editor the user has open. Never `--bless`. Quit what you launched, including when a later command fails. Record every exit code. Exit codes: 0 ok, 4 no host, 5 retry, 6 failed, 7 host died, 8 check failed. A launched runtime or server is held at frame 0 until `play` or `step` (the server uses the same hold). `EnsurePhysics` runs from the tick (`RuntimeFrame.cpp:338`, `ServerApp.cpp:279`), so the world check is after `step`, not on the held frame. The world check is `resource list`: exit 0 and the envelope's `resources` array contains the name `Arcane::PhysicsWorld2D` (`TypeID` name; MSVC strips the `struct` prefix). An empty array is a failure. Do not use `resource get PhysicsWorld2D`: the type has no `ARC_REFLECT_TYPE` (`Physics2DWorld.hpp:67-84`), so get returns `reflect.unreadable` (exit 6) even when the instance exists. Do not treat an `ecs query` that returns zero rows as proof the world was minted.
+- **Servitor** after every task whose change the running host executes: Tasks 4, 5, 7, and 8. Tasks 1–3 only add tests and checked-in bytes. Task 6 adds proxies `ExtractFrame.cpp` does not call yet; the host check for that path is Task 7. Binary: `Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe`, built from this tree. Launch your own `--headless` host. Do not pass `--client` to `launch` or `status`. Main refuses it with exit 2. Fix-round Task 21 makes them accept it. The commands below work either way. Never drive an editor the user has open. Never `--bless`. Quit what you launched, including when a later command fails. Record every exit code. Exit codes: 0 ok, 4 no host, 5 retry, 6 failed, 7 host died, 8 check failed. A launched runtime or server is held at frame 0 until `play` or `step` (the server uses the same hold). `EnsurePhysics` runs from the tick (`RuntimeFrame.cpp:338`, `ServerApp.cpp:279`), so the world check is after `step`, not on the held frame. The world check is `resource list`: exit 0 and the envelope's `resources` array contains the name `Arcane::PhysicsWorld2D` (Astra's canonical `TypeID<T>::Name()`, `TypeNameCanonical.hpp`: no `struct` keyword on any compiler). An empty array is a failure. Do not use `resource get PhysicsWorld2D`: the type has no `ARC_REFLECT_TYPE` (`Physics2DWorld.hpp:67-84`), so get returns `reflect.unreadable` (exit 6) even when the instance exists. Do not treat an `ecs query` that returns zero rows as proof the world was minted.
 - **ABI:** do not change `kGamePluginABIVersion`, do not edit `PluginABI.hpp`, and do not edit any `.arcproj` `"abi"` field. Task 4 may run `arcane-abi-digest --check` and must not `--write`. Task 5 may replace `kGamePluginABIDigest` and `build/abi-digest.txt` only with the bytes printed by an `arcane-abi-digest.exe` that was rebuilt after the header edit. `--write` from the previous binary records the old mix. It does not bump the epoch.
 - **Style:** `/MD`, no `/fp:fast`, MKS, `+Y` up, gravity default `{0, -9.81}` (`Physics2DBinding.hpp:23`), ASCII comments, UTF-8 without BOM. Do not edit `ThirdParty/`. Do not "fix" kinematic velocity, collider remint, or any L09 gap while moving code. Failure is a `Result`, a refusal, or an empty optional. No new listener bus.
 - **Every commit message ends with these two lines, exactly:**
@@ -65,6 +67,8 @@ Claude-Session: https://claude.ai/code/session_01Ertr3dpdimU1VjCXXAJSBi
 ```
 
 ### Line drift (code wins)
+
+Re-verified 2026-10-19 on `main` `a12f33e6`: no cited file changed since `309aa06e`.
 
 Verified 2026-10-17 at HEAD `309aa06e`. Use these paths and lines, not the spec's when they differ.
 
@@ -101,7 +105,7 @@ These are the five inputs most likely to bite that a task's other tests would mi
 Do not implement any of these. A task that starts one is wrong; stop.
 
 - Plan B's codec move, its epoch bump, and the first digest (written while `operator()` is still inline in `PhysicsSystem.hpp` and `handle` is still `BodyHandle`). Task 4 of this plan only `--check`s that digest. Task 5 rebuilds the tool and then regenerates the digest after the field change. Plan C (bindless, residency, uploads, the fix #11 completion check).
-- Fix #11 itself. `Runtime::Impl` still constructs one `JobSystem` per world (`Runtime.cpp:200`, initialized at line 239). The hook does not construct a `JobSystem`. It passes `m_impl->sched.get()`, the scheduler `EnsurePhysics` already uses (`Runtime.cpp:651-652`).
+- Fix #11 itself (fix-round Tasks 11-12). On `main` `a12f33e6`, `Runtime::Impl` still constructs one `JobSystem` per world (`Runtime.cpp:200`, initialized at line 239). Task 8 starts only after fix Tasks 11-12 are on `main`. Re-read `Runtime::Impl` then. The hook does not construct a `JobSystem`. It passes the scheduler `EnsurePhysics` hands to `SetExecutor` in that tree (`m_impl->sched.get()` at `Runtime.cpp:651-652` on `a12f33e6`).
 - Box3D, a second sim hook, F5 Plans 2 and 3, L09 kinematic/`SetVelocity`/collider-remint changes, L08 artifact security, an ABI bump, a golden re-bless.
 - Editing `ThirdParty/Manifold2D`, including `DebugCollide`'s signature.
 
@@ -136,6 +140,7 @@ Do not implement any of these. A task that starts one is wrong; stop.
 - Create: `Tests/ArcaneTests/src/PhysicsV1BaselineTest.cpp`
 - Create: `Tests/ArcaneTests/data/physics/v1-step-trace.txt`
 - Create: `Tests/ArcaneTests/data/physics/v1-step-trace.sha256`
+- Modify: `Tests/ArcaneTests/src/MacroPrefixGuardTest.cpp:15-19`: add `"ARCANE_CAPTURE_PHYSICS_BASELINE"` to `kEnvNames`. The guard fails on any `ARCANE_*` token under `Source/` or `Tests/ArcaneTests/` that is not on that list.
 - Test: the compare case in that cpp. The capture case is hidden (`[.]`).
 
 `BuildV1PhysicsScene` and `WriteV1StepTrace` are declared in the helper header and defined in the test cpp (or inline in the header). They are not in an anonymous namespace. `ArtifactReaderTest.cpp` keeps its cook helpers TU-local; that is why a later cpp cannot call them. Task 6 and Task 8 include `Helpers/PhysicsV1Baseline.hpp`. Do not copy the functions into those files.
@@ -207,7 +212,7 @@ TEST_CASE("v1 step trace matches the checked-in bytes", "[physics][baseline]")
 Desk build from Global Constraints. The test calls only symbols that exist today (`Runtime`, `EnsurePhysics`, `Sha256Hex`), so the build's `ExitCode` is 0. A compile error here means the helper header was not picked up by the glob; fix that before calling it a red test.
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "v1 step trace matches the checked-in bytes" --rng-seed 1
 ```
 
@@ -252,7 +257,7 @@ Expected: PASS. Then the suite gate from Global Constraints. Expected: the scrip
 - [ ] **Step 5: Commit**
 
 ```
-git add Tests/ArcaneTests/src/Helpers/PhysicsV1Baseline.hpp Tests/ArcaneTests/src/PhysicsV1BaselineTest.cpp Tests/ArcaneTests/data/physics/v1-step-trace.txt Tests/ArcaneTests/data/physics/v1-step-trace.sha256
+git add Tests/ArcaneTests/src/Helpers/PhysicsV1Baseline.hpp Tests/ArcaneTests/src/PhysicsV1BaselineTest.cpp Tests/ArcaneTests/src/MacroPrefixGuardTest.cpp Tests/ArcaneTests/data/physics/v1-step-trace.txt Tests/ArcaneTests/data/physics/v1-step-trace.sha256
 git commit -m "test: check in the v1 physics step trace"
 ```
 
@@ -323,7 +328,7 @@ Each requires the txt and the sha256, checks `Sha256Hex`, rebuilds the scene, st
 The new cases are edits to a TU Task 1 already built. Desk build anyway (the vcxproj already lists the cpp; the build compiles the new cases). Expected: `ExitCode` 0. The cases call `GatherPhysicsDebug`, which exists today.
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "v1 whole-world debug matches the checked-in bytes" --rng-seed 1
 ```
 
@@ -433,7 +438,7 @@ TEST_CASE("v1 texture and mesh artifacts match the checked-in bytes", "[artifact
 Desk build. `ArtifactV1FixtureTest.cpp` is a new TU, so the generate inside the desk build is what adds it. Expected: `ExitCode` 0. The test calls `WriteTextureArtifact` / `WriteMeshArtifact`, which exist. A compile error means a helper copied from `ArtifactReaderTest.cpp` was left in that file's anonymous namespace and is not the duplicate this task told you to paste.
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "v1 texture and mesh artifacts match the checked-in bytes" --rng-seed 1
 ```
 
@@ -503,7 +508,7 @@ TEST_CASE("PhysicsSystem.hpp is gone and the pass body is not a header", "[physi
 The case is an edit to `PhysicsV1BaselineTest.cpp`, which is already in the vcxproj. Desk build so the new case is in the exe. Expected: `ExitCode` 0. The case only calls `filesystem::exists` and reads a file.
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "PhysicsSystem.hpp is gone and the pass body is not a header" --rng-seed 1
 ```
 
@@ -536,21 +541,23 @@ If `AbiManifest.hpp` includes `PhysicsSystem.hpp`, point that include at `Physic
 Desk build from Global Constraints. Expected: exit 0. Plan B's `build.ps1` runs `arcane-abi-digest --check` after the engine build, so this exit 0 already means the checked-in digest matches the post-move mix. Run the tool once more and require exit 0. Do not `--write`. If `--check` exits non-zero, the move changed a recorded layout. Stop. Do not update the digest in this task.
 
 ```powershell
-D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\arcane-abi-digest.exe --check
+D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\arcane-abi-digest.exe --check
 ```
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "v1 step trace matches the checked-in bytes" --rng-seed 1
 .\ArcaneTests.exe "PhysicsSystem.hpp is gone and the pass body is not a header" --rng-seed 1
 ```
 
-Expected: both PASS. The trace bytes are unchanged. Then, from the exe directory, `powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug`. Expected: exit 0. Do not run the golden gate.
+Expected: both PASS. The trace bytes are unchanged. Then, from the exe directory, `powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug`. Expected: exit 0. Do not run the golden gate.
 
-Servitor, own headless runtime. `launch` has no `--client`. Record each exit code. Quit even if a later command fails.
+Run this exact Servitor sequence once on an unmodified build of the arc's base commit and record the exit codes. `compare runtime-scene` after `wait settled` reads the held frame 0. Fix-round Tasks 18-19 change what frame 0 presents. If the base tree already exits 8, that is pre-existing and not this task's regression. Report it and do not bless.
+
+Servitor, own headless runtime. Do not pass `--client` to `launch` or `status`. Main refuses it with exit 2. Fix-round Task 21 makes them accept it. The commands below work either way. Record each exit code. Quit even if a later command fails.
 
 ```powershell
-$S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$S = 'D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
 & $S --project ReferenceProject launch runtime --headless -- --fixed-time 0
 & $S --project ReferenceProject --client plan-a --host runtime wait settled
 & $S --project ReferenceProject --client plan-a --host runtime step 30
@@ -655,11 +662,13 @@ Do not bump `kGamePluginABIVersion`.
 Desk build (the new TU is not in the vcxproj until generate). Expected: `ExitCode` 0. Then, from the exe directory:
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "v1 bodyref save captures the whole component" --rng-seed 1
 ```
 
 Expected: PASS. The blob is the file `Save` wrote. Do not hand-author its bytes. Do not commit yet.
+
+Capture `v1-bodyref-save.bin` in the arc worktree. Do not copy a blob from `Arcane-f5`: `309aa06e` predates Astra `fa5ff853`, whose canonical `TypeID<T>::Hash()` is the hash the per-element record and the descriptor record carry.
 
 - [ ] **Step 2: Rewrite the test, build, and stop on the compile error**
 
@@ -741,12 +750,12 @@ TEST_CASE("a bodyref version other than 1 or 2 returns the code the reader can s
 The header edit is already on disk. Rebuild only `arcane-abi-digest` so the compiler re-evaluates `AbiManifestMix`. Do not run `scripts\ci\build.ps1` yet: after Plan B, that script runs `--check` after the engine build and exits when the file or `kGamePluginABIDigest` still holds the pre-`uint64` mix. Premake's `location` for this app is `Source/Programs/arcane-abi-digest` (the same pattern as `arcbuild` at `premake5.lua:580`), so the project file is the path below. `Resolve-MSBuild` is exported from `ArcaneCi.psm1`.
 
 ```powershell
-Import-Module D:\dev\starworks\Arcane-f5\scripts\ci\ArcaneCi.psm1 -Force
+Import-Module D:\dev\starworks\Arcane-3dr\scripts\ci\ArcaneCi.psm1 -Force
 $msbuild = Resolve-MSBuild
-$proj = 'D:\dev\starworks\Arcane-f5\Source\Programs\arcane-abi-digest\arcane-abi-digest.vcxproj'
+$proj = 'D:\dev\starworks\Arcane-3dr\Source\Programs\arcane-abi-digest\arcane-abi-digest.vcxproj'
 $tool = Start-Process -FilePath $msbuild -ArgumentList @(
     $proj, '/p:Configuration=Debug', '/m:4', '/nologo', '/v:minimal'
-) -WorkingDirectory 'D:\dev\starworks\Arcane-f5' -PassThru -NoNewWindow
+) -WorkingDirectory 'D:\dev\starworks\Arcane-3dr' -PassThru -NoNewWindow
 if (-not $tool.HasExited) { $tool.PriorityClass = 'BelowNormal' }
 $tool.WaitForExit()
 if ($tool.ExitCode -ne 0) { throw "abi digest tool build failed: exit $($tool.ExitCode)" }
@@ -755,7 +764,7 @@ if ($tool.ExitCode -ne 0) { throw "abi digest tool build failed: exit $($tool.Ex
 Then run that new exe. Do not type a hex literal by hand:
 
 ```powershell
-D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\arcane-abi-digest.exe --write
+D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\arcane-abi-digest.exe --write
 ```
 
 `--write` rewrites `build/abi-digest.txt` as the post-`uint64` mix. Copy that integer into `kGamePluginABIDigest`. Do not change `kGamePluginABIVersion`. On Linux and macOS, build this same target, then `--write`, then the full `build.sh`. Do not `--write` with the binary from before the header edit.
@@ -763,11 +772,11 @@ D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\ar
 Desk build from Global Constraints. Expected: `ExitCode` 0. That script's `--check` is part of the exit code. Run it once more and require exit 0:
 
 ```powershell
-D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\arcane-abi-digest.exe --check
+D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\arcane-abi-digest\arcane-abi-digest.exe --check
 ```
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "PhysicsBodyRef2D handle is the packed uint64 and a v1 blob loads as scale only" --rng-seed 1
 .\ArcaneTests.exe "a bodyref version other than 1 or 2 returns the code the reader can set" --rng-seed 1
 .\ArcaneTests.exe "v1 step trace matches the checked-in bytes" --rng-seed 1
@@ -776,7 +785,7 @@ Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneT
 Expected: all three PASS. The pose bits do not move because `UnpackBody(PackBody(h))` is `h`. Version 0 is `UnsupportedVersion` on the direct reader and `CorruptedData` on `Registry::Load`. Version 3 is `CorruptedData` on both. Then:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
 Expected: exit 0. `PhysicsComponentsTest`'s load assertion (handle 0, scale `{2, 3}`) is part of that gate. Do not run the golden gate.
@@ -784,7 +793,7 @@ Expected: exit 0. `PhysicsComponentsTest`'s load assertion (handle 0, scale `{2,
 Servitor, from the repo root. Client name `plan-a`. Quit even if a later command fails. Record every exit code.
 
 ```powershell
-$S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$S = 'D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
 & $S --project ReferenceProject launch runtime --headless -- --fixed-time 0
 & $S --project ReferenceProject --client plan-a --host runtime wait settled
 & $S --project ReferenceProject --client plan-a --host runtime step 30
@@ -792,7 +801,7 @@ $S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servi
 & $S --project ReferenceProject --client plan-a --host runtime quit
 ```
 
-Expected: every exit 0. `launch` has no `--client`. After `step 30`, `resource list`'s `resources` array contains `Arcane::PhysicsWorld2D`. An empty array is a failure. Do not call `resource get`.
+Expected: every exit 0. Do not pass `--client` to `launch` or `status`. Main refuses it with exit 2. Fix-round Task 21 makes them accept it. The commands below work either way. After `step 30`, `resource list`'s `resources` array contains `Arcane::PhysicsWorld2D`. An empty array is a failure. Do not call `resource get`.
 
 - [ ] **Step 5: Commit**
 
@@ -940,7 +949,7 @@ TEST_CASE("PhysicsQuery.hpp names no solver type", "[physics][proxy]")
 Desk build. Expected: `ExitCode` 0. Then, from the exe directory, the proxy cases and the trace compare. Expected: the three debug files, the inspector file, and the pick file all match. `view == nullopt` is empty. A non-empty v1 result is required, which is what shows the registrar ran. Trace compare still PASS.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
 Expected: exit 0. Do not switch `ExtractFrame.cpp` yet. Do not run the golden gate. Do not launch Servitor in this task: `ExtractFrame.cpp` does not call these proxies yet. Task 7 is the host check for this path.
@@ -1034,7 +1043,7 @@ TEST_CASE("ArcaneRender includes no physics solver header", "[physics][proxy]")
 The scan only reads files. It compiles against today's tree. Desk build. Expected: `ExitCode` 0. Then, from the exe directory:
 
 ```powershell
-Set-Location D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\ArcaneTests
+Set-Location D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\ArcaneTests
 .\ArcaneTests.exe "ArcaneRender includes no physics solver header" --rng-seed 1
 ```
 
@@ -1053,7 +1062,7 @@ Replace the debug block with one `FillPhysicsDebug` call and `PaintPhysicsDebug`
 Desk build. Expected: `ExitCode` 0. The include scan PASS. Task 2's five compare cases PASS (they call gather directly, so they still pass). Add one case that runs `ExtractFrame` on the v1 scene with `physicsDebug` set and checks the packet's overlay physics primitives equal `v1-debug-wholeworld.txt`. Use the existing `ExtractFrame` test harness in `ExtractFrameTest.cpp` for how a packet is built; do not invent a second extract entry point. Trace compare PASS.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\run-tests.ps1 Debug
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\run-tests.ps1 Debug
 ```
 
 Expected: exit 0. No golden gate yet.
@@ -1061,7 +1070,7 @@ Expected: exit 0. No golden gate yet.
 Servitor, from the repo root. Client name `plan-a`. Quit even if a later command fails. Record every exit code.
 
 ```powershell
-$S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$S = 'D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
 & $S --project ReferenceProject launch runtime --headless -- --fixed-time 0
 & $S --project ReferenceProject --client plan-a --host runtime wait settled
 & $S --project ReferenceProject --client plan-a --host runtime step 30
@@ -1070,7 +1079,7 @@ $S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servi
 & $S --project ReferenceProject --client plan-a --host runtime quit
 ```
 
-Expected: every exit 0. `launch` has no `--client`. `resource list` contains `Arcane::PhysicsWorld2D`. `compare` exit 8 is a pixel miss; stop and do not bless. Exit 7 means the host died.
+Expected: every exit 0. Do not pass `--client` to `launch` or `status`. Main refuses it with exit 2. Fix-round Task 21 makes them accept it. The commands below work either way. `resource list` contains `Arcane::PhysicsWorld2D`. `compare` exit 8 is a pixel miss; stop and do not bless. Exit 7 means the host died.
 
 - [ ] **Step 5: Commit**
 
@@ -1089,7 +1098,8 @@ with the trailer.
 - Create: `Source/Runtime/ArcaneCore/src/Arcane/Sim/SimHook.hpp`
 - Create: `Source/Runtime/ArcaneCore/src/Arcane/Sim/SimHook.cpp`
 - Create: `Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/Physics2DSimHook.cpp`
-- Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Base/ProcessContext.cpp:30-34`
+- Modify: `ProcessContext.cpp`, `ProcessContext::Create`, between `AttachAllModules` and `PrewarmEngineResourceTypes` (lines 30-34 on `a12f33e6`; fix Task 12 edits this file, so re-find both calls)
+- Modify: `Tests/ArcaneTests/src/MacroPrefixGuardTest.cpp` `kEnvNames`: add `"ARCANE_TEST_NO_PHYSICS_HOOK"` (`Physics2DSimHook.cpp` and `PhysicsHookBootTest.cpp` read it).
 - Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Base/Runtime.cpp` (roster 326, frame begin 370–376, `InstallEngineSystems` 606–611, `EnsurePhysics` 628–655, `PhysicsEditPass` 657–661, `ResetPhysics` 663–672)
 - Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Scene/EngineRoster.hpp:23` and `:32-37` (drop the three physics types)
 - Modify: `Source/Runtime/ArcaneEngine/src/Arcane/Scene/EngineResourceTypes.cpp:3` and `:21` (drop `PhysicsWorld2D`)
@@ -1138,7 +1148,7 @@ Physics2D's static registrar (in `Physics2DSimHook.cpp`) registers one hook unle
 - `RegisterComponents`: `RegisterPhysicsComponents2D(creg);`
 - `InstallSystems`: if `!fixed.HasSystem<PhysicsSystem2D>()`, `fixed.AddSystem<PhysicsSystem2D>(fixedDt, true);`
 - `FrameBegin`: if `PhysicsWorld2D* res = reg.GetResource<PhysicsWorld2D>()`, `res->BeginFrame();`
-- `EnsureWorld`: the body of `EnsurePhysics` from line 632 down, but gravity comes from the arguments. `ToWorldDef` stays in this TU. `SetExecutor(scheduler)` only when `Settings<PhysicsWorldSettings2D>().parallelSolver` is true. The hook does not construct a `JobSystem`. `scheduler` is `m_impl->sched.get()` from the caller, including when the flag is false (the hook decides).
+- `EnsureWorld`: the body of `EnsurePhysics` from line 632 down, but gravity comes from the arguments. `ToWorldDef` stays in this TU. `SetExecutor(scheduler)` only when `Settings<PhysicsWorldSettings2D>().parallelSolver` is true. The hook does not construct a `JobSystem`. `scheduler` is the work scheduler `EnsurePhysics` passes to `SetExecutor` in the tree you start from (after fix Task 12, the process `JobSystem`'s scheduler), including when the flag is false (the hook decides).
 - `EditPass`: `PhysicsSystem2D{fixedDt, false}(reg);`
 - `ResetWorld`: `reg.RemoveResource<PhysicsWorld2D>();` only. The caller still removes `PhysicsInterpBuffer2D` (that type is Scene-owned, `SceneCacheRecords.hpp`).
 - `ReplaceFixedRate`: `fixed.RemoveSystem<PhysicsSystem2D>()` then `fixed.AddSystem<PhysicsSystem2D>(fixedDt, true)`. This is what `Runtime::SetFixedHz` does today by name (`Runtime.cpp:444-455`): it stores the new `fixedHz`, calls `loop->SetFixedHz`, then `RemoveSystem<PhysicsSystem2D>()` and `InstallEngineSystems()`. `InstallEngineSystems` (`Runtime.cpp:590-616`) only `AddSystem`s when `!HasSystem`, and the system stores `m_fixedDt` privately (`Physics2DWorld.hpp:113-120`) and steps `world.Step(m_fixedDt)`. After this task `SetFixedHz` updates `loopCfg` and the loop, then calls every hook's `ReplaceFixedRate(fixedUpdate, static_cast<float>(1.0 / hz))`. It does not name `PhysicsSystem2D`. It does not need a second `InstallEngineSystems` call to refresh that one system. `SweepSimTest.cpp:187-208` stays green.
@@ -1151,7 +1161,7 @@ Call sites:
 - `Runtime` ctor, immediately after `RegisterRoster` (line 326), on the `ComponentRegistry` (the `Registry` does not exist yet; it is created at line 328): each hook's `RegisterComponents`. A secondary world that shares the registry runs the same function. `ClearSystems` does not call it.
 - `InstallEngineSystems`: delete the `PhysicsSystem2D` block (lines 607–611) and call each hook's `InstallSystems(fixed, fixedDt)` in that slot, before transform propagation. `PhysicsSystem2D` still declares `Before<TransformPropagationSystem>`.
 - Frame-begin lambda (lines 373–376): call each hook's `FrameBegin` instead of naming `PhysicsWorld2D`.
-- `EnsurePhysics`: keep `ResolvedGravity()` in Engine. Call `EnsureWorld(*registry, g.x, g.y, m_impl->sched.get())`. Then `SetResource(PhysicsInterpBuffer2D{})` stays in Engine when the hook minted a world. The simplest split: `EnsureWorld` does the world mint **and** the interp-buffer set, because both are today's pair (`Runtime.cpp:653-654`) and the interp buffer type is already Scene-owned so Physics2D may set it (Physics2D depends on Scene). Engine's `EnsurePhysics` becomes the gravity resolve plus the hook call. Engine does not mention `Manifold2D`, `Access`, or `ToWorldDef`.
+- `EnsurePhysics`: keep `ResolvedGravity()` in Engine. Call `EnsureWorld(*registry, g.x, g.y, that same scheduler)`. Then `SetResource(PhysicsInterpBuffer2D{})` stays in Engine when the hook minted a world. The simplest split: `EnsureWorld` does the world mint **and** the interp-buffer set, because both are today's pair (`Runtime.cpp:653-654`) and the interp buffer type is already Scene-owned so Physics2D may set it (Physics2D depends on Scene). Engine's `EnsurePhysics` becomes the gravity resolve plus the hook call. Engine does not mention `Manifold2D`, `Access`, or `ToWorldDef`.
 - `PhysicsEditPass`: hook `EditPass` only.
 - `ResetPhysics`: hook `ResetWorld`, then `RemoveResource<PhysicsInterpBuffer2D>()` in Engine.
 
@@ -1298,10 +1308,10 @@ Expected: all PASS. The child exit is non-zero inside the first case. Record eac
 
 `run-tests.ps1` includes `ServerWitnessTest`: `schemaVersion` is still 1, `hasPhysics` is true, and `hasPhysicsWorld` is true. A report with no `hasPhysicsWorld` field, or with that field false, fails. The in-process runtime case's `GetResource<PhysicsWorld2D>()` is non-null. Zero ECS rows are not a pass.
 
-Servitor, from the repo root, on both hosts. Client name `plan-a`. Quit each host even if a later command fails. Record every exit code. `launch` and `status` take no `--client`.
+Servitor, from the repo root, on both hosts. Client name `plan-a`. Quit each host even if a later command fails. Record every exit code. Do not pass `--client` to `launch` or `status`. Main refuses it with exit 2. Fix-round Task 21 makes them accept it. The commands below work either way.
 
 ```powershell
-$S = 'D:\dev\starworks\Arcane-f5\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
+$S = 'D:\dev\starworks\Arcane-3dr\Binaries\Debug-windows-x86_64-md\Servitor\servitor.exe'
 & $S --project ReferenceProject launch runtime --headless -- --fixed-time 0
 & $S --project ReferenceProject --client plan-a --host runtime wait settled
 & $S --project ReferenceProject --client plan-a --host runtime step 30
@@ -1319,7 +1329,7 @@ Expected: every command exits 0. After each `step 30`, that host's `resource lis
 Golden gate, Debug, after deleting both `imgui.ini` files:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-f5\scripts\golden-gate.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\starworks\Arcane-3dr\scripts\golden-gate.ps1
 ```
 
 Expected: 14 lanes, every `diffCount` 0. Do not pass `--bless`. If a lane is non-zero, stop. This plan does not re-bless.
