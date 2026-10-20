@@ -157,6 +157,7 @@ namespace Arcane::Editor
         const Arcane::PluginVTable* plugin = host ? host->Vtable() : nullptr;
 
         bool ok;
+#if !defined(ARC_BUILD_DIST)
         if (m_failNextRestore)
         {
             // Test seam (editor.play.failnextrestore): force the failure
@@ -165,7 +166,9 @@ namespace Arcane::Editor
             m_failNextRestore = false;
             ok = false;
         }
-        else if (m_usedPlugin && plugin && plugin->LoadState)
+        else
+#endif
+        if (m_usedPlugin && plugin && plugin->LoadState)
         {
             // Restore via the plugin's LoadState -- it re-establishes native resources
             // (physics world, scene root) AFTER RestoreRegistry, which Arcane Editor cannot
@@ -189,7 +192,9 @@ namespace Arcane::Editor
             // a scene that is not the authored one. Residual: this Stop has already
             // dropped the embedded server world and switched the primary to Standalone
             // (the teardown above stays where it is), so a retry restores a Standalone
-            // Play.
+            // Play. A SeparateServer session also sets m_topology = Standalone here
+            // while its child process keeps running (AfterPlayFlip stops it only on a
+            // real Play->Edit flip), so the retry's flip is what stops the child.
             return false;
         }
         m_mode = EditorMode::Edit;

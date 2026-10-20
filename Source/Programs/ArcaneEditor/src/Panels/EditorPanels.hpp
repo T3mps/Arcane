@@ -244,6 +244,7 @@ namespace Arcane::Editor
         bool launchStandalone    = false;    // SeparateWindow Play, this frame
         bool launchServer        = false;    // SeparateServerProcess Play, this frame
         bool problemsChipClicked = false;    // s8.2 routes it
+        bool stopFailed          = false;    // the Stop click's restore was refused; the caller surfaces it
     };
     [[nodiscard]] ToolbarResult DrawSimTimeToolbar(PlaySession& play, Arcane::Runtime& runtime,
                                                    Arcane::PluginHost* host, PlayLaunchMode& mode,

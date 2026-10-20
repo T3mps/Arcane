@@ -2866,6 +2866,8 @@ namespace Arcane::Editor
         // own declaration states the split).
         if (toolbar.launchServer)
             DoLaunchServer();
+        if (toolbar.stopFailed)
+            PushPlayStopFailedModal();   // the toolbar Stop shares the menu/command failure path
         if (toolbar.problemsChipClicked)
         {
             m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
@@ -3100,7 +3102,14 @@ namespace Arcane::Editor
             LaunchProjectOpenRequests(startReq);
         }
         // New documents tab into the Viewport's node (captured last frame).
-        m_documents.DrawAll(m_viewportDockId);
+        // The document unsaved-changes confirm joins the one-modal gate (ModalGate.hpp):
+        // it draws only when no error / parked scene intent outranks it.
+        m_documents.DrawAll(m_viewportDockId,
+            Arcane::Editor::ModalAllowed(m_modalErrors.Front() != nullptr,
+                                         m_scene.Pending() != Arcane::Editor::SceneIntent::None,
+                                         m_documents.HasPendingConfirm(),
+                                         false) != Arcane::Editor::ModalKind::UnsavedDocument
+            && m_documents.HasPendingConfirm());
         // Input-editor spec s2.6: a saved input document pushed a republish
         // request from Save(); apply it here, at the frame boundary, whether or
         // not the document still exists (save-and-close destroys it inside
@@ -4009,9 +4018,43 @@ namespace Arcane::Editor
     {
         m_modalErrors.Push("Probe Error", "editor.modal.probe: a queued error that must draw before the create dialog.");
         BeginCreateAsset(Arcane::Editor::CreateAssetRequest{ Arcane::Editor::CreateAssetKind::Material });
+        if (!m_createDialog.open)
+            m_modalErrors.Pop();   // BeginCreateAsset refused: do not leave the probe error queued
         return m_createDialog.open;
     }
     void EditorApp::DismissModalProbe() { m_modalErrors.Pop(); }
+    namespace
+    {
+        // A dirty document with no window: only its close confirm is under test.
+        class ProbeDirtyDocument final : public Arcane::Editor::EditorDocument
+        {
+        public:
+            const std::string& Title() const override { return m_title; }
+            Arcane::Guid AssetGuid() const override { return {}; }
+            bool Dirty() const override { return true; }
+            bool Save() override { return true; }
+            void Draw(bool&) override {}
+            void NoteMoved(const std::filesystem::path&) override {}
+        private:
+            std::string m_title = "ModalProbeDocument";
+        };
+    }
+    bool EditorApp::ArmDocumentModalProbe()
+    {
+        if (m_documents.HasPendingConfirm())
+            return false;
+        Arcane::Editor::EditorDocument* doc = m_documents.Add(std::make_unique<ProbeDirtyDocument>());
+        m_documents.RequestClose(doc);
+        return m_documents.HasPendingConfirm();
+    }
+    void EditorApp::ClearDocumentModalProbe()
+    {
+        if (Arcane::Editor::EditorDocument* doc = m_documents.PendingConfirmDoc())
+        {
+            m_documents.CancelClose();
+            m_documents.CloseForAssetRemoval(doc);
+        }
+    }
     void EditorApp::ArmFailNextRestore() { m_play.FailNextRestoreForTesting(); }
     Arcane::Editor::ModalKind EditorApp::ModalProbeKind() const noexcept { return m_modalDrawn; }
 
@@ -4043,7 +4086,11 @@ namespace Arcane::Editor
         Arcane::Transform* ta = reg.GetComponent<Arcane::Transform>(a);
         Arcane::Transform* tb = reg.GetComponent<Arcane::Transform>(b);
         if (!desc || !ta || !tb)
+        {
+            const std::array<Astra::Entity, 2> made{ a, b };
+            (void)Arcane::Edit::DeleteEntities(reg, made);
             return false;
+        }
         ta->position = glm::vec3(0.0f);
         tb->position = glm::vec3(0.0f);
 
@@ -4088,6 +4135,7 @@ namespace Arcane::Editor
         const Arcane::Editor::ModalKind allowed = Arcane::Editor::ModalAllowed(
             m_modalErrors.Front() != nullptr,
             pending != Arcane::Editor::SceneIntent::None,
+            m_documents.HasPendingConfirm(),
             m_createDialog.open);
 
         // ONE error modal, FIFO off the queue (architecture pass sec 7). The title

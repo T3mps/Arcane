@@ -17,7 +17,7 @@ namespace Arcane::Editor
 
 // The wire args of editor.modal.probe, reflected for its schema.
 struct ModalProbeArgs {
-    std::string op;   // arm | dismiss | drawn
+    std::string op;   // arm | doc | docclear | dismiss | drawn
 };
 ARC_REFLECT_TYPE(ModalProbeArgs)
     ARC_REFLECT_FIELD(ModalProbeArgs, op)
@@ -28,7 +28,7 @@ namespace
 
 EditorApp* g_app = nullptr;   // main thread only (the arming site and Drain)
 
-constexpr const char* kUsage = "pass op=arm, op=dismiss or op=drawn";
+constexpr const char* kUsage = "pass op=arm, op=doc, op=docclear, op=dismiss or op=drawn";
 
 const char* KindName(ModalKind kind)
 {
@@ -36,6 +36,7 @@ const char* KindName(ModalKind kind)
         case ModalKind::None: return "None";
         case ModalKind::Error: return "Error";
         case ModalKind::UnsavedScene: return "UnsavedScene";
+        case ModalKind::UnsavedDocument: return "UnsavedDocument";
         case ModalKind::CreateAsset: return "CreateAsset";
     }
     return "None";
@@ -74,13 +75,22 @@ Remote::CommandResult ModalProbe(const Remote::Call& call, void* /*user*/)
             return result;
         }
         result.envelope = Remote::MakeOk(call.command, {{"createOpen", true}}, {});
+    } else if (op == "doc") {
+        // A dirty document's close confirm, beside whatever else is queued (ModalGate).
+        const bool pending = g_app->ArmDocumentModalProbe();
+        result.envelope = pending ? Remote::MakeOk(call.command, {{"documentPending", true}}, {})
+                                  : Remote::MakeError(call.command, "host.unavailable",
+                                                      "a document confirm is already pending", kUsage);
+    } else if (op == "docclear") {
+        g_app->ClearDocumentModalProbe();
+        result.envelope = Remote::MakeOk(call.command, {{"cleared", true}}, {});
     } else if (op == "dismiss") {
         g_app->DismissModalProbe();
         result.envelope = Remote::MakeOk(call.command, {{"dismissed", true}}, {});
     } else if (op == "drawn") {
         result.envelope = Remote::MakeOk(call.command, {{"kind", KindName(g_app->ModalProbeKind())}}, {});
     } else {
-        result.envelope = Remote::MakeError(call.command, "arg.invalid", "op must be arm, dismiss or drawn", kUsage);
+        result.envelope = Remote::MakeError(call.command, "arg.invalid", "op must be arm, doc, docclear, dismiss or drawn", kUsage);
     }
     return result;
 }

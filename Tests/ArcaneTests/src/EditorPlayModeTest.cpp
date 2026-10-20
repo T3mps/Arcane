@@ -168,9 +168,23 @@ TEST_CASE("a failed Stop is wired through Save, Clear and the plugin Poll", "[ed
     CHECK(scene.find("PushPlayStopFailedModal()") != std::string::npos);   // Clear shares the Save button's modal
     CHECK(frame.find("if (!InPlayMode())") != std::string::npos);
     CHECK(frame.find("editor.play.failnextrestore") != std::string::npos);
+    // The test hook is compiled out of Dist: method, member and branch sit inside the guard.
+    const std::string hdr = read("Source/Programs/ArcaneEditor/src/App/PlayMode.hpp");
+    const std::size_t hook = hdr.find("FailNextRestoreForTesting");
+    REQUIRE(hook != std::string::npos);
+    const std::size_t hookGuard = hdr.rfind("#if !defined(ARC_BUILD_DIST)", hook);
+    REQUIRE(hookGuard != std::string::npos);
+    CHECK(hdr.find("#endif", hookGuard) > hook);
+    const std::size_t branch = play.find("m_failNextRestore");
+    REQUIRE(branch != std::string::npos);
+    const std::size_t branchGuard = play.rfind("#if !defined(ARC_BUILD_DIST)", branch);
+    REQUIRE(branchGuard != std::string::npos);
+    CHECK(play.find("#endif", branchGuard) > branch);
     const std::size_t poll = frame.find("m_plugin->Poll();");
     REQUIRE(poll != std::string::npos);
-    CHECK(frame.rfind("if (!InPlayMode())", poll) > poll - 120);   // the guard is the statement right above
+    const std::size_t guardAt = frame.rfind("if (!InPlayMode())", poll);
+    REQUIRE(guardAt != std::string::npos);   // the guard text must exist before its position means anything
+    CHECK(poll - guardAt < 120);             // the guard is the statement right above
 }
 
 namespace

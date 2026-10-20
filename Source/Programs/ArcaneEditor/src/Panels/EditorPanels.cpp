@@ -867,7 +867,10 @@ namespace Arcane::Editor
                 // it stood up (the embedded server world detaches here). The
                 // SEPARATE server PROCESS is not this object's to kill; the caller
                 // stops it right after, keyed on the Play->Edit flip.
-                play.Stop(runtime, host);
+                // A refused Stop stays in Play: the caller pushes the same error
+                // modal the menu / command Stop use (EditorApp::PushPlayStopFailedModal).
+                if (!play.Stop(runtime, host))
+                    result.stopFailed = true;
             }
             else
             {

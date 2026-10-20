@@ -477,6 +477,37 @@ TEST_CASE("an editor in Edit refuses pause, resume and step, and a refused Play 
     CHECK(row->envelope.errors[0].code == "play.stopped");
 }
 
+namespace {
+bool EditorStopRefuses(void*) { return false; }
+}
+
+TEST_CASE("a refused editor play.stop fails the pending step instead of leaving it to time out", "[remote][play]") {
+    g_editorPlaying = true;
+    g_editorPaused = false;
+    g_editorSteps = 0;
+    Arcane::Remote::PlayHooks hooks;
+    hooks.editor = true;
+    hooks.editorSetPaused = &EditorSetPaused;
+    hooks.editorRequestSingleStep = &EditorOneStep;
+    hooks.editorPlaying = &EditorIsPlaying;
+    hooks.editorStop = &EditorStopRefuses;
+    Arcane::Remote::JobTable jobs;
+    Arcane::Remote::HostGate gate;
+    RemotePlayScope play(hooks, jobs, &gate);
+
+    const auto armed = InvokePlay("play.step", {{"n", 5}});
+    REQUIRE(armed.completesJob != 0);
+    const auto stop = InvokePlay("play.stop").envelope;
+    REQUIRE_FALSE(stop.errors.empty());
+    CHECK(stop.errors[0].code == "play.refused");
+    // The pending step is finished now, not left waiting for a client timeout.
+    const auto* row = jobs.Find(Arcane::Remote::JobId{armed.completesJob});
+    REQUIRE(row != nullptr);
+    CHECK(row->state == Arcane::Remote::JobState::Failed);
+    REQUIRE_FALSE(row->envelope.errors.empty());
+    CHECK(row->envelope.errors[0].code == "play.stopped");
+}
+
 TEST_CASE("play commands answer host.unavailable unarmed, and a new table ends a running step play.stopped", "[remote][play]") {
     Arcane::Remote::TickGate tick;
     tick.SetRunning(false);
