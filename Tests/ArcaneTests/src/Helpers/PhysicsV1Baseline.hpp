@@ -28,7 +28,9 @@ namespace Arcane::Test
     std::string WriteV1StepTrace(Arcane::Runtime& rt, int steps);
 
     // Which debug request a dump reproduces (see Task 2 of the plan).
-    enum class V1DebugView { WholeWorld, SelectedOnly, AltView };
+    // AltView is dumped at step 20 (bodies moving). AltViewAlpha0 is the same affine at alpha 0,
+    // used only to prove alpha is pinned.
+    enum class V1DebugView { WholeWorld, SelectedOnly, AltView, AltViewAlpha0 };
 
     // Header line plus one primitive per line. Call after the steps.
     std::string DumpV1Debug(Arcane::Runtime& rt, const V1PhysicsScene& scene, V1DebugView view);

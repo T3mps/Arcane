@@ -93,7 +93,7 @@ namespace Arcane::Test
         Arcane::Fixture2D DynFixture(Arcane::ShapeKind2D kind)
         {
             Arcane::Fixture2D f; f.kind = kind;
-            f.isSensor = false; f.contactEvents = true; f.hitEvents = true; f.sensorEvents = false;
+            f.isSensor = false; f.contactEvents = true; f.hitEvents = true; f.sensorEvents = true;   // the floor overrides this to false (tangent to the sensor)
             return f;
         }
 
@@ -177,7 +177,7 @@ namespace Arcane::Test
         V1PhysicsScene s;
         {   // Floor
             Arcane::Fixture2D f = DynFixture(Arcane::ShapeKind2D::Aabb);
-            f.halfW = 5.0f; f.halfH = 0.5f;
+            f.halfW = 5.0f; f.halfH = 0.5f; f.sensorEvents = false;
             s.entities[0] = reg.CreateEntity();
             AddBody(reg, s.entities[0], { 0.0f, -1.0f, 0.0f }, Arcane::BodyType2D::Static, 0.0f, f);
         }
@@ -213,7 +213,10 @@ namespace Arcane::Test
         REQUIRE(Arcane::Settings<Arcane::SimSettings>().fixedHz == 60.0);
         std::string out = "arcane-physics-v1-step-trace 1\n";
         out += "steps " + std::to_string(steps) + "\n";
-        out += "parallelSolver 0\n";
+        // The header prints the setting actually in force; the baseline is defined for the default (off).
+        const bool parallelSolver = Arcane::Settings<Arcane::PhysicsWorldSettings2D>().parallelSolver;
+        REQUIRE_FALSE(parallelSolver);
+        out += std::string("parallelSolver ") + (parallelSolver ? "1" : "0") + "\n";
         auto& reg = rt.Registry();
         for (int step = 1; step <= steps; ++step)
         {
@@ -257,9 +260,10 @@ namespace Arcane::Test
         const auto& solver = Solver(rt);
 
         Arcane::PhysicsDebugDrawOptions2D opts = Arcane::MakePhysicsDebugDrawOptions();
-        const bool alt = view == V1DebugView::AltView;
+        const bool alt = view == V1DebugView::AltView || view == V1DebugView::AltViewAlpha0;
         opts.view = alt ? kAlt : kOrdinary;
-        opts.alpha = alt ? 0.25f : 0.0f;
+        opts.alpha = view == V1DebugView::AltView ? 0.25f : 0.0f;
+        // EnsurePhysics creates PhysicsInterpBuffer2D (Runtime.cpp:654), so this is a real buffer, read as ExtractFrame does.
         opts.interp = reg.GetResource<Arcane::PhysicsInterpBuffer2D>();
         opts.velocities = false;
         opts.comMarkers = false;
@@ -274,7 +278,8 @@ namespace Arcane::Test
             REQUIRE(it != ents.end());
             opts.onlyBody = Arcane::Detail::Physics2D::PackBody(it->second);
         }
-        else if (alt) name = "altview";
+        else if (view == V1DebugView::AltView) name = "altview step 20";
+        else if (alt) name = "altview-alpha0";
 
         Arcane::PhysicsDebugGeometry geo;
         Arcane::GatherPhysicsDebug(solver, opts, Arcane::Settings<Arcane::PhysicsDebugStyleSettings2D>(), geo);
@@ -337,11 +342,11 @@ namespace Arcane::Test
     namespace
     {
         // Rebuild the scene and run the 120 steps; returns the scene.
-        V1PhysicsScene StepScene(Arcane::Runtime& rt)
+        V1PhysicsScene StepScene(Arcane::Runtime& rt, int steps = 120)
         {
             const V1PhysicsScene scene = BuildV1PhysicsScene(rt.Registry());
             rt.EnsurePhysics();
-            (void)WriteV1StepTrace(rt, 120);
+            (void)WriteV1StepTrace(rt, steps);
             return scene;
         }
     }
@@ -358,6 +363,12 @@ TEST_CASE("v1 step trace matches the checked-in bytes", "[physics][baseline]")
     std::string expect = ReadFileBinary(hashPath);
     if (!expect.empty() && expect.back() == '\n') expect.pop_back();
     CHECK(Arcane::Crypto::Sha256Hex(disk) == expect);
+
+    // The trace must pin sensor behavior: at least one sensorBegin span is non-empty.
+    bool anySensorBegin = false;
+    for (std::size_t at = disk.find("\nsensorBegin "); at != std::string::npos; at = disk.find("\nsensorBegin ", at + 1))
+        if (std::atoi(disk.c_str() + at + 13) > 0) { anySensorBegin = true; break; }
+    CHECK(anySensorBegin);
 
     Arcane::Runtime rt(Arcane::Test::Process());
     BuildV1PhysicsScene(rt.Registry());
@@ -383,8 +394,12 @@ TEST_CASE("v1 selected-only debug matches the checked-in bytes", "[physics][base
 TEST_CASE("v1 alt-view debug matches the checked-in bytes", "[physics][baseline]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
-    const auto scene = StepScene(rt);
-    CompareSnapshot("v1-debug-altview", DumpV1Debug(rt, scene, V1DebugView::AltView));
+    // Step 20: all three dynamic bodies are in free fall, so the interpolated pose
+    // (alpha 0.25) differs from the current one. At rest alpha would pin nothing.
+    const auto scene = StepScene(rt, 20);
+    const std::string altDump = DumpV1Debug(rt, scene, V1DebugView::AltView);
+    CompareSnapshot("v1-debug-altview", altDump);
+    CHECK(altDump != DumpV1Debug(rt, scene, V1DebugView::AltViewAlpha0));
 
     const auto dir = RepoRoot() / "Tests/ArcaneTests/data/physics";
     const auto whole = ReadFileBinary(dir / "v1-debug-wholeworld.txt");
@@ -423,7 +438,10 @@ TEST_CASE("capture v1 debug and pick snapshots", "[.][physics-baseline]")
     const auto scene = StepScene(rt);
     WriteSnapshot("v1-debug-wholeworld", DumpV1Debug(rt, scene, V1DebugView::WholeWorld));
     WriteSnapshot("v1-debug-selected", DumpV1Debug(rt, scene, V1DebugView::SelectedOnly));
-    WriteSnapshot("v1-debug-altview", DumpV1Debug(rt, scene, V1DebugView::AltView));
     WriteSnapshot("v1-inspector", DumpV1Inspector(rt, scene));
     WriteSnapshot("v1-pick", DumpV1Pick(rt));
+
+    Arcane::Runtime rtAlt(Arcane::Test::Process());
+    const auto sceneAlt = StepScene(rtAlt, 20);
+    WriteSnapshot("v1-debug-altview", DumpV1Debug(rtAlt, sceneAlt, V1DebugView::AltView));
 }

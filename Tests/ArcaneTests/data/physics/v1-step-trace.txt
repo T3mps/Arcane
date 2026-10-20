@@ -11,7 +11,8 @@ bodies 5
 contactBegin 0
 contactEnd 0
 contactHit 0
-sensorBegin 0
+sensorBegin 1
+4 1 0 0 1 1 0 0
 sensorEnd 0
 step 2
 bodies 5
@@ -312,7 +313,8 @@ bodies 5
 contactBegin 0
 contactEnd 0
 contactHit 0
-sensorBegin 0
+sensorBegin 1
+4 1 0 0 3 1 0 0
 sensorEnd 0
 step 27
 bodies 5
@@ -420,7 +422,8 @@ bodies 5
 contactBegin 0
 contactEnd 0
 contactHit 0
-sensorBegin 0
+sensorBegin 1
+4 1 0 0 2 1 0 0
 sensorEnd 0
 step 36
 bodies 5
