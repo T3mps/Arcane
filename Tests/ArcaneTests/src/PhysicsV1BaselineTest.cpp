@@ -131,6 +131,13 @@ namespace Arcane::Test
         }
 
         // Compare a checked-in text snapshot: hash file, bytes, live dump.
+        // The primitive lines only: drops the header line, so a compare cannot pass on the name alone.
+        std::string WithoutHeader(const std::string& dump)
+        {
+            const auto nl = dump.find('\n');
+            return nl == std::string::npos ? std::string() : dump.substr(nl + 1);
+        }
+
         void CompareSnapshot(const char* stem, const std::string& live)
         {
             const auto dir = RepoRoot() / "Tests/ArcaneTests/data/physics";
@@ -201,9 +208,10 @@ namespace Arcane::Test
         }
         {   // Sensor
             Arcane::Fixture2D f = DynFixture(Arcane::ShapeKind2D::Circle);
-            f.radius = 1.0f; f.isSensor = true; f.sensorEvents = true; f.contactEvents = false; f.hitEvents = false;
+            f.radius = 0.4f; f.isSensor = true; f.sensorEvents = true; f.contactEvents = false; f.hitEvents = false;
             s.entities[4] = reg.CreateEntity();
-            AddBody(reg, s.entities[4], { 0.0f, 0.5f, 0.0f }, Arcane::BodyType2D::Static, 0.0f, f);
+            // Above the resting height of every body, so the falling circle enters and then leaves it.
+            AddBody(reg, s.entities[4], { 0.0f, 1.5f, 0.0f }, Arcane::BodyType2D::Static, 0.0f, f);
         }
         return s;
     }
@@ -284,7 +292,7 @@ namespace Arcane::Test
         Arcane::PhysicsDebugGeometry geo;
         Arcane::GatherPhysicsDebug(solver, opts, Arcane::Settings<Arcane::PhysicsDebugStyleSettings2D>(), geo);
         const std::string header = alt
-            ? std::string("arcane-physics-v1-debug 1 ") + name + " alpha 0.25 offset 100 80 scale 50 -40"
+            ? std::string("arcane-physics-v1-debug 1 ") + name + (view == V1DebugView::AltView ? " alpha 0.25" : " alpha 0") + " offset 100 80 scale 50 -40"
             : std::string("arcane-physics-v1-debug 1 ") + name + " alpha 0 offset 640 360 scale 100 -100";
         return DumpGeometry(header, geo);
     }
@@ -369,6 +377,10 @@ TEST_CASE("v1 step trace matches the checked-in bytes", "[physics][baseline]")
     for (std::size_t at = disk.find("\nsensorBegin "); at != std::string::npos; at = disk.find("\nsensorBegin ", at + 1))
         if (std::atoi(disk.c_str() + at + 13) > 0) { anySensorBegin = true; break; }
     CHECK(anySensorBegin);
+    bool anySensorEnd = false;
+    for (std::size_t at = disk.find("\nsensorEnd "); at != std::string::npos; at = disk.find("\nsensorEnd ", at + 1))
+        if (std::atoi(disk.c_str() + at + 11) > 0) { anySensorEnd = true; break; }
+    CHECK(anySensorEnd);
 
     Arcane::Runtime rt(Arcane::Test::Process());
     BuildV1PhysicsScene(rt.Registry());
@@ -399,7 +411,9 @@ TEST_CASE("v1 alt-view debug matches the checked-in bytes", "[physics][baseline]
     const auto scene = StepScene(rt, 20);
     const std::string altDump = DumpV1Debug(rt, scene, V1DebugView::AltView);
     CompareSnapshot("v1-debug-altview", altDump);
-    CHECK(altDump != DumpV1Debug(rt, scene, V1DebugView::AltViewAlpha0));
+    const std::string alpha0Dump = DumpV1Debug(rt, scene, V1DebugView::AltViewAlpha0);
+    CHECK_FALSE(WithoutHeader(altDump).empty());
+    CHECK(WithoutHeader(altDump) != WithoutHeader(alpha0Dump));
 
     const auto dir = RepoRoot() / "Tests/ArcaneTests/data/physics";
     const auto whole = ReadFileBinary(dir / "v1-debug-wholeworld.txt");
