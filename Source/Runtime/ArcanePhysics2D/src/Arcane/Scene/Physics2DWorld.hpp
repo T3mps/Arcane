@@ -6,6 +6,7 @@
 // the solver passes. PhysicsWorld2D's destructor is out of line: the solver
 // object stays an incomplete type here.
 
+#include <Arcane/Core/AbiAccess.hpp>
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Guid.hpp>
@@ -87,6 +88,7 @@ namespace Arcane
 
     private:
         friend struct PhysicsSystem2D;
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
         friend struct ::Arcane::Detail::Physics2D::Access;
 
         ARC_PHYSICS2D_API void RecordBody(Arcane::Entity entity, Guid guid, Detail::Physics2D::BodyHandle handle,
@@ -116,6 +118,7 @@ namespace Arcane
         void operator()(Arcane::Registry& reg);
 
     private:
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
         float m_fixedDt;
         bool  m_stepWorld;
     };

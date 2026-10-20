@@ -95,6 +95,7 @@ int main(int argc, char** argv)
         if (!out) { std::fprintf(stderr, "arcane-abi-digest: cannot write %s\n", file.string().c_str()); return 1; }
         out << hex << '\n';
         out.close();
+        if (!out) { std::fprintf(stderr, "arcane-abi-digest: writing %s failed\n", file.string().c_str()); return 1; }
         std::printf("wrote %s: %s\nkGamePluginABIDigest must be 0x%sull\n", file.string().c_str(), hex.c_str(), hex.c_str());
         return 0;
     }

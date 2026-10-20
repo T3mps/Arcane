@@ -3,10 +3,11 @@
 // build/abi-digest.txt holds AbiManifestMix() at the default Astra defines;
 // kGamePluginABIDigest is the same value, compiled in. The tool
 // arcane-abi-digest (Source/Programs/arcane-abi-digest) writes and checks the
-// file. These cases pin the file, the constant, comment stability (through a
-// SECOND translation unit that compiles a comment-appended copy of the
-// manifest header), and the two completeness scans that keep the manifest in
-// step with the 21 game-facing headers.
+// file. These cases pin the file, the constant, comment stability and the
+// mutation witnesses (second translation units that compile a comment-appended
+// copy of the manifest and shadow copies of listed headers with one mutation
+// each), and the completeness scans that keep the manifest in step with the 21
+// game-facing headers.
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -65,6 +67,16 @@ namespace
         "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/Physics2DHandles.hpp",
     };
 
+    // Headers outside the 21 that define by-value field types of the 21's structs.
+    // Their struct names count as "structs" for the transitive-record case.
+    constexpr const char* kAbiFieldTypeHeaders[] = {
+        "Source/Runtime/ArcaneCore/src/Arcane/Guid.hpp",
+        "Source/Runtime/ArcaneCore/src/Arcane/Math/Aabb.hpp",
+        "Source/Runtime/ArcaneScene/src/Arcane/Scene/ViewTransform.hpp",
+        "Source/Runtime/ArcaneAssets/src/Arcane/Mesh/MeshAsset.hpp",
+        "Source/Runtime/ArcaneAssets/src/Arcane/Mesh/MeshBuilder.hpp",
+    };
+
     fs::path RepoRootDir() { return Arcane::Test::FindReferenceProjectDir().parent_path(); }
 
     std::string ReadFileBinary(const fs::path& path)
@@ -92,8 +104,10 @@ namespace
     //
     // Comments, string literals (kept as ""), preprocessor lines (+ continuations)
     // and `ARC_INTERNAL_BEGIN` ... `ARC_INTERNAL_END` fences are removed. Line
-    // structure is kept (one output line per input line) so the result stays readable.
-    std::string StripPublic(const std::string& text)
+    // structure is kept (one output line per input line). `commentsOnly` strips
+    // comments and nothing else (used on the manifest, whose string literals are
+    // the data).
+    std::string StripPublic(const std::string& text, bool commentsOnly = false)
     {
         std::string out;
         std::istringstream in(text);
@@ -102,10 +116,13 @@ namespace
         while (std::getline(in, raw))
         {
             if (!raw.empty() && raw.back() == '\r') raw.pop_back();
-            if (raw.find("ARC_INTERNAL_BEGIN") != std::string::npos) { inFence = true;  out += '\n'; continue; }
-            if (raw.find("ARC_INTERNAL_END")   != std::string::npos) { inFence = false; out += '\n'; continue; }
-            if (inFence) { out += '\n'; continue; }
-            if (inDefine) { inDefine = !raw.empty() && raw.back() == '\\'; out += '\n'; continue; }
+            if (!commentsOnly)
+            {
+                if (raw.find("ARC_INTERNAL_BEGIN") != std::string::npos) { inFence = true;  out += '\n'; continue; }
+                if (raw.find("ARC_INTERNAL_END")   != std::string::npos) { inFence = false; out += '\n'; continue; }
+                if (inFence) { out += '\n'; continue; }
+                if (inDefine) { inDefine = !raw.empty() && raw.back() == '\\'; out += '\n'; continue; }
+            }
 
             std::string code;
             for (std::size_t i = 0; i < raw.size(); ++i)
@@ -129,14 +146,14 @@ namespace
                         ++j;
                     }
                     const std::size_t end = std::min(j + close.size(), raw.size());
-                    code += "\"\"";
+                    code += commentsOnly ? raw.substr(i, end - i) : std::string("\"\"");
                     i = end - 1;
                     continue;
                 }
                 code += raw[i];
             }
             const auto first = code.find_first_not_of(" \t");
-            if (first != std::string::npos && code[first] == '#')
+            if (!commentsOnly && first != std::string::npos && code[first] == '#')
             {
                 inDefine = !raw.empty() && raw.back() == '\\';
                 out += '\n';
@@ -156,15 +173,32 @@ namespace
         return s.substr(a, b - a + 1);
     }
 
-    // ---- struct field scan -------------------------------------------------------
+    // ---- type scan ------------------------------------------------------------------
     //
-    // Finds every `struct` defined at NAMESPACE scope (not nested in a class, a
-    // struct or a function) and returns (struct name, field name) for each
-    // non-static data member in its PUBLIC part. Functions, constructors, usings,
-    // friends, templates and enums are not fields. A `private:`/`protected:`
-    // label hides the members after it (their offsetof is ill-formed), until a
-    // `public:` label. Brace initialisers and inline function bodies are skipped.
+    // Finds every `struct` and `class` defined at NAMESPACE scope (not nested in a
+    // class, a struct or a function) and records its non-static data members. A
+    // struct's members are public until a `private:`/`protected:` label, a class's
+    // private until `public:`. Functions, constructors, usings, friends, templates and
+    // enums are not fields; brace initialisers and inline function bodies are skipped.
+    // A type that declares `friend struct ...Detail::AbiManifest::Access;` has handed
+    // the manifest its private members too: ScannedType::Checked() then includes them.
     enum class Scope { Namespace, Struct, Other };
+
+    struct ScannedField { std::string name; bool priv = false; };
+    struct ScannedType
+    {
+        std::string name;
+        bool friendAccess = false;
+        std::vector<ScannedField> fields;
+
+        std::vector<std::string> Checked() const
+        {
+            std::vector<std::string> out;
+            for (const ScannedField& f : fields)
+                if (!f.priv || friendAccess) out.push_back(f.name);
+            return out;
+        }
+    };
 
     std::string StripAccess(std::string head, bool& priv)
     {
@@ -178,7 +212,7 @@ namespace
         return head;
     }
 
-    // Splits `head` at depth-0 commas; returns the declarator names.
+    // The declarator names of one member declaration (empty for non-fields).
     std::vector<std::string> FieldNames(const std::string& declIn)
     {
         std::string decl = Trim(declIn);
@@ -188,14 +222,12 @@ namespace
         if (decl.find("operator") != std::string::npos) return {};
         static const std::regex fnPtr(R"(\(\s*\*\s*(\w+)\s*\))");
         std::smatch pm;
-        const bool hasParen = decl.find('(') != std::string::npos;
-        if (hasParen)
+        if (decl.find('(') != std::string::npos)
         {
             // A function-pointer field is `ret (*name)(args)`; any other `(` is a function.
             if (std::regex_search(decl, pm, fnPtr)) return { pm[1].str() };
             return {};
         }
-        // Drop attributes, then split declarators at depth 0.
         decl = std::regex_replace(decl, std::regex(R"(\[\[[^\]]*\]\])"), " ");
         std::vector<std::string> parts;
         std::string cur;
@@ -213,7 +245,7 @@ namespace
         {
             const auto eq = part.find('=');
             if (eq != std::string::npos) part = part.substr(0, eq);
-            part = std::regex_replace(part, std::regex(R"(:\s*\d+\s*$)"), "");   // bit-field width
+            part = std::regex_replace(part, std::regex(R"(:\s*\d+\s*$)"), "");    // bit-field width
             part = std::regex_replace(part, std::regex(R"(\[[^\]]*\]\s*$)"), ""); // array extent
             static const std::regex last(R"((\w+)\s*$)");
             std::smatch lm;
@@ -222,18 +254,20 @@ namespace
         return names;
     }
 
-    std::vector<std::pair<std::string, std::string>> StructFields(const std::string& source)
+    std::vector<ScannedType> ScanTypes(const std::string& source)
     {
         std::string text = StripPublic(source);
         text = std::regex_replace(text, std::regex(R"(\bARC_CHANGE_TRACKED\b)"), " ");
         text = std::regex_replace(text, std::regex(R"(\bARC_CONSTANT\s*\(\s*""\s*\))"), " ");
 
-        std::vector<std::pair<std::string, std::string>> fields;
-        std::vector<std::pair<Scope, std::string>> stack;   // scope kind + struct name
+        std::vector<ScannedType> types;
+        struct Frame { Scope kind; int type; bool isClass; };
+        std::vector<Frame> stack;
         bool priv = false;
         std::string head;
         int skipDepth = 0;   // inside a skipped brace group (function body / initialiser)
-        const auto top = [&]() { return stack.empty() ? Scope::Namespace : stack.back().first; };
+        const auto top = [&]() { return stack.empty() ? Scope::Namespace : stack.back().kind; };
+        static const std::regex friendRe(R"(\bfriend\s+struct\s+(?:::)?(?:Arcane::)?Detail::AbiManifest::Access\b)");
 
         for (std::size_t i = 0; i < text.size(); ++i)
         {
@@ -249,18 +283,19 @@ namespace
                 bool p = priv;
                 const std::string h = Trim(StripAccess(head, p));
                 static const std::regex nsRe(R"(^(inline\s+)?namespace\b|^extern\s*""$)");
-                static const std::regex structRe(R"(^struct\s+(?:(?:ARC_\w+|alignas\s*\([^)]*\))\s+)*(\w+)\s*(?:final\s*)?(?::[^{]*)?$)");
+                static const std::regex typeRe(R"(^(struct|class)\s+(?:(?:ARC_\w+|alignas\s*\([^)]*\))\s+)*(\w+)\s*(?:final\s*)?(?::[^{]*)?$)");
                 std::smatch m;
                 if (top() == Scope::Namespace && std::regex_search(h, nsRe))
                 {
-                    stack.push_back({ Scope::Namespace, {} });
+                    stack.push_back({ Scope::Namespace, -1, false });
                     head.clear();
                 }
                 else if (top() == Scope::Namespace && h.find("template") == std::string::npos &&
-                         std::regex_search(h, m, structRe))
+                         std::regex_search(h, m, typeRe))
                 {
-                    stack.push_back({ Scope::Struct, m[1].str() });
-                    priv = false;
+                    types.push_back({ m[2].str(), false, {} });
+                    stack.push_back({ Scope::Struct, static_cast<int>(types.size()) - 1, m[1].str() == "class" });
+                    priv = stack.back().isClass;
                     head.clear();
                 }
                 else if (top() == Scope::Struct)
@@ -269,15 +304,14 @@ namespace
                     // its declaration; any other brace group is an initialiser, which
                     // belongs to the declaration and is simply skipped.
                     static const std::regex fnTail(R"(\)\s*(?:const|noexcept|override|final|volatile|&|&&|\s)*(?:->[^;{]*)?$)");
-                    const bool isFn = std::regex_search(h, fnTail);
                     priv = p;
-                    if (isFn) head.clear();
+                    if (std::regex_search(h, fnTail)) head.clear();
                     else head = h + " ";
                     skipDepth = 1;
                 }
                 else
                 {
-                    stack.push_back({ Scope::Other, {} });
+                    stack.push_back({ Scope::Other, -1, false });
                     head.clear();
                 }
                 continue;
@@ -296,26 +330,30 @@ namespace
                     bool p = priv;
                     const std::string h = StripAccess(head, p);
                     priv = p;
-                    if (!priv)
-                        for (const std::string& n : FieldNames(h))
-                            fields.push_back({ stack.back().second, n });
+                    ScannedType& t = types[static_cast<std::size_t>(stack.back().type)];
+                    if (std::regex_search(h, friendRe)) t.friendAccess = true;
+                    for (const std::string& n : FieldNames(h)) t.fields.push_back({ n, priv });
                 }
                 head.clear();
                 continue;
             }
             head += c;
         }
-        return fields;
+        return types;
     }
 
-    // Names of the structs defined at namespace scope.
-    std::vector<std::string> StructNames(const std::string& source)
+    std::vector<std::pair<std::string, std::string>> CheckedFields(const std::string& source)
     {
-        const std::string text = StripPublic(source);
+        std::vector<std::pair<std::string, std::string>> out;
+        for (const ScannedType& t : ScanTypes(source))
+            for (const std::string& f : t.Checked()) out.push_back({ t.name, f });
+        return out;
+    }
+
+    std::vector<std::string> TypeNames(const std::string& source)
+    {
         std::vector<std::string> names;
-        static const std::regex re(R"(\bstruct\s+(?:ARC_\w+\s+)*(\w+)\s*(?:final\s*)?(?::[^{;]*)?\{)");
-        for (std::sregex_iterator it(text.begin(), text.end(), re), end; it != end; ++it)
-            names.push_back((*it)[1].str());
+        for (const ScannedType& t : ScanTypes(source)) names.push_back(t.name);
         return names;
     }
 
@@ -336,6 +374,8 @@ namespace
         return used;
     }
 
+    // `manifest` is the manifest with comments removed (StripPublic(.., true)), so a
+    // commented-out entry does not count.
     bool ManifestHasOffsetof(const std::string& manifest, const std::string& type, const std::string& field)
     {
         const std::regex re("offsetof\\(\\s*(?:\\w+::)*" + type + "\\s*,\\s*" + field + "\\s*\\)");
@@ -353,25 +393,34 @@ namespace
         return RepoRootDir() / "Source/Runtime/ArcaneCore/src/Arcane/Core/AbiManifest.hpp";
     }
 
-    std::string RunCaptured(const std::string& commandLine)
+    std::string ManifestCode() { return StripPublic(ReadFileBinary(ManifestPath()), true); }
+
+    // Runs `exe args` and returns its stdout. cmd.exe /c wants the whole line wrapped in
+    // one more pair of quotes; /bin/sh wants the executable path quoted on its own.
+    std::string RunCaptured(const fs::path& exe, const std::string& args)
     {
-        const std::string line = "\"" + commandLine + "\"";
+#if defined(_WIN32)
+        const std::string line = "\"\"" + exe.string() + "\" " + args + "\"";
+#else
+        const std::string line = "'" + exe.string() + "' " + args;
+#endif
         FILE* pipe = ABI_TEST_POPEN(line.c_str(), "r");
         REQUIRE(pipe != nullptr);
         std::string out;
         char buf[256];
         while (std::fgets(buf, sizeof(buf), pipe)) out += buf;
-        ABI_TEST_PCLOSE(pipe);
+        const int status = ABI_TEST_PCLOSE(pipe);
+        CHECK(status == 0);
         return out;
     }
 
-    fs::path DigestToolPath()
+    fs::path SiblingTool(const char* dir, const char* exe)
     {
         const fs::path exeDir = fs::path(Arcane::ExecutablePathUtf8()).parent_path();
 #if defined(_WIN32)
-        return exeDir.parent_path() / "arcane-abi-digest" / "arcane-abi-digest.exe";
+        return exeDir.parent_path() / dir / (std::string(exe) + ".exe");
 #else
-        return exeDir.parent_path() / "arcane-abi-digest" / "arcane-abi-digest";
+        return exeDir.parent_path() / dir / exe;
 #endif
     }
 }
@@ -405,31 +454,65 @@ TEST_CASE("a comment-only change does not move the abi digest", "[plugin][abi]")
     CHECK(a != b);
     CHECK(b.size() > a.size());
 
-    const fs::path tool = DigestToolPath();
+    const fs::path tool = SiblingTool("arcane-abi-digest", "arcane-abi-digest");
     REQUIRE(fs::exists(tool));
-    const std::string plain = TrimTrailingNewline(RunCaptured(tool.string() + " --print"));
-    const std::string other = TrimTrailingNewline(RunCaptured(tool.string() + " --print-commented"));
+    const std::string plain = TrimTrailingNewline(RunCaptured(tool, "--print"));
+    const std::string other = TrimTrailingNewline(RunCaptured(tool, "--print-commented"));
     CHECK(plain == Hex16(Arcane::AbiManifestMix()));
     CHECK(other == plain);
+}
+
+TEST_CASE("a mutated listed header moves the abi digest, a comment in it does not", "[plugin][abi]")
+{
+    // arcane-abi-digest-mutants compiles shadow copies of ProcessContext.hpp,
+    // Aabb.hpp and ViewTransform.hpp (premake writes them at generate time; see the
+    // comment above that project). `base` carries only a comment line; each other
+    // variant adds ONE mutation: a private int before ProcessContext's first
+    // container, or a swap of two same-size fields.
+    const fs::path tool = SiblingTool("arcane-abi-digest-mutants", "arcane-abi-digest-mutants");
+    REQUIRE(fs::exists(tool));
+    std::map<std::string, std::string> mix;
+    std::istringstream lines(RunCaptured(tool, ""));
+    for (std::string line; std::getline(lines, line);)
+    {
+        line = TrimTrailingNewline(line);
+        const auto sp = line.find(' ');
+        if (sp != std::string::npos) mix[line.substr(0, sp)] = line.substr(sp + 1);
+    }
+    REQUIRE(mix.size() == 4);
+    // The shadow copies are the real headers plus a comment: the same mix.
+    CHECK(mix["base"] == Hex16(Arcane::AbiManifestMix()));
+    CHECK(mix["process-private"] != mix["base"]);
+    CHECK(mix["aabb-swap"] != mix["base"]);
+    CHECK(mix["view-swap"] != mix["base"]);
 }
 
 TEST_CASE("every public struct field is in the abi manifest", "[plugin][abi]")
 {
     // Self-checks for the scanner.
     {
-        const auto probe = StructFields("struct Probe { int alpha; };");
+        const auto probe = CheckedFields("struct Probe { int alpha; };");
         REQUIRE(probe.size() == 1);
         CHECK(probe[0].first == "Probe");
         CHECK(probe[0].second == "alpha");
-        CHECK(StructFields("// int alpha;").empty());
-        const auto two = StructFields("struct P { int a, b; static constexpr int k = 1; void F() { int local; } int c{ 3 }; private: int hidden; };");
+        CHECK(CheckedFields("// int alpha;").empty());
+        const auto two = CheckedFields("struct P { int a, b; static constexpr int k = 1; void F() { int local; } int c{ 3 }; private: int hidden; };");
         REQUIRE(two.size() == 3);
         CHECK(two[0].second == "a");
         CHECK(two[1].second == "b");
         CHECK(two[2].second == "c");
+        // A class is private until public:, and its private members count only when it befriends Access.
+        CHECK(CheckedFields("class K { int hidden; public: int shown; };").size() == 1);
+        const auto fr = CheckedFields("class K { friend struct ::Arcane::Detail::AbiManifest::Access; int hidden; public: int shown; };");
+        REQUIRE(fr.size() == 2);
+        CHECK(fr[0].second == "hidden");
+        CHECK(fr[1].second == "shown");
+        // A commented-out manifest entry is not an entry.
+        CHECK_FALSE(ManifestHasOffsetof(StripPublic("// f.Field(\"a\", offsetof(Probe, alpha), 1, 1, \"int\");", true), "Probe", "alpha"));
+        CHECK(ManifestHasOffsetof(StripPublic("f.Field(\"a\", offsetof(Probe, alpha), 1, 1, \"int\"); // c", true), "Probe", "alpha"));
     }
 
-    const std::string manifest = ReadFileBinary(ManifestPath());
+    const std::string manifest = ManifestCode();
     REQUIRE_FALSE(manifest.empty());
     const fs::path root = RepoRootDir();
     std::size_t scanned = 0;
@@ -438,7 +521,7 @@ TEST_CASE("every public struct field is in the abi manifest", "[plugin][abi]")
         INFO(header);
         const std::string source = ReadFileBinary(root / header);
         REQUIRE_FALSE(source.empty());
-        for (const auto& [type, field] : StructFields(source))
+        for (const auto& [type, field] : CheckedFields(source))
         {
             ++scanned;
             INFO(type << "::" << field);
@@ -446,6 +529,61 @@ TEST_CASE("every public struct field is in the abi manifest", "[plugin][abi]")
         }
     }
     CHECK(scanned > 100);   // the walk must actually have seen the fields
+}
+
+TEST_CASE("every abi header struct and class is a manifest root", "[plugin][abi]")
+{
+    // A root with no public fields (Hidden, EnsureScope, ProcessContext, ...) is
+    // invisible to the field scan; deleting its f.Type must still fail.
+    const std::string manifest = ManifestCode();
+    REQUIRE_FALSE(manifest.empty());
+    const fs::path root = RepoRootDir();
+    std::size_t seen = 0;
+    for (const char* header : kAbiHeaders)
+    {
+        INFO(header);
+        for (const std::string& name : TypeNames(ReadFileBinary(root / header)))
+        {
+            ++seen;
+            INFO(name);
+            CHECK(ManifestHasRoot(manifest, name));
+        }
+    }
+    CHECK(seen > 40);
+    CHECK_FALSE(ManifestHasRoot(StripPublic("// f.Type(\"Arcane::Probe\", 1, 1);", true), "Probe"));
+}
+
+TEST_CASE("every struct-typed manifest field has its own record", "[plugin][abi]")
+{
+    // Spec 3.4: field types reached by value are recorded transitively. A declared type
+    // that names a struct or class defined in the headers (not std::, glm::, a pointer or
+    // a template) must have an f.Type, so a same-size reorder inside it moves the digest.
+    const fs::path root = RepoRootDir();
+    std::set<std::string> known;
+    for (const char* header : kAbiHeaders)
+        for (const std::string& n : TypeNames(ReadFileBinary(root / header))) known.insert(n);
+    for (const char* header : kAbiFieldTypeHeaders)
+        for (const std::string& n : TypeNames(ReadFileBinary(root / header))) known.insert(n);
+    REQUIRE(known.count("Aabb") == 1);
+    REQUIRE(known.count("ViewTransform") == 1);
+    REQUIRE(known.count("MeshData") == 1);
+
+    const std::string manifest = ManifestCode();
+    static const std::regex fieldRe(R"re(f\.Field\(\s*"[^"]*"\s*,[^;]*,\s*"([^"]*)"\s*\);)re");
+    static const std::regex bareType(R"(^(?:const\s+)?(?:\w+::)*(\w+)$)");
+    std::size_t checked = 0;
+    for (std::sregex_iterator it(manifest.begin(), manifest.end(), fieldRe), end; it != end; ++it)
+    {
+        std::smatch bm;
+        const std::string declared = (*it)[1].str();
+        if (!std::regex_match(declared, bm, bareType)) continue;
+        const std::string name = bm[1].str();
+        if (known.count(name) == 0) continue;
+        ++checked;
+        INFO(declared);
+        CHECK(ManifestHasRoot(manifest, name));
+    }
+    CHECK(checked > 10);
 }
 
 TEST_CASE("a by-value public parameter is in the abi root list", "[plugin][abi]")
@@ -458,7 +596,7 @@ TEST_CASE("a by-value public parameter is in the abi root list", "[plugin][abi]"
         CHECK(ByValueUses("void Foo(std::span<const Probe> view);", probeSet).empty());
     }
 
-    const std::string manifest = ReadFileBinary(ManifestPath());
+    const std::string manifest = ManifestCode();
     REQUIRE_FALSE(manifest.empty());
     const fs::path root = RepoRootDir();
 
@@ -467,7 +605,7 @@ TEST_CASE("a by-value public parameter is in the abi root list", "[plugin][abi]"
     for (const char* header : kAbiHeaders)
     {
         sources.push_back(ReadFileBinary(root / header));
-        for (const std::string& n : StructNames(sources.back())) structs.insert(n);
+        for (const std::string& n : TypeNames(sources.back())) structs.insert(n);
     }
     std::set<std::string> used;
     for (const std::string& source : sources)

@@ -39,6 +39,7 @@
 // exported from ArcaneClient.dll.
 
 #include <Arcane/Base/Assert.hpp>
+#include <Arcane/Core/AbiAccess.hpp>
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>   // Process()/RegisterSystem reach SystemFactories()
 #include <Arcane/Base/Runtime.hpp>
@@ -166,6 +167,7 @@ namespace Arcane
         }
 
     private:
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
         EngineContext*           m_ctx        = nullptr;
         Arcane::ComponentModule* m_components = nullptr;
     };

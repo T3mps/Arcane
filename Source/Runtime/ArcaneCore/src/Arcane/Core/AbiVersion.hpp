@@ -15,5 +15,5 @@ namespace Arcane
     // `arcane-abi-digest --check` and the [abi] tests enforce that. Regenerate with
     // `arcane-abi-digest --write` after rebuilding the tool, then copy the value here.
     ARC_CONSTANT("ABI: compiler-derived layout digest; regenerate with arcane-abi-digest --write")
-    inline constexpr std::uint64_t kGamePluginABIDigest = 0xa6be06724e8fab59ull;
+    inline constexpr std::uint64_t kGamePluginABIDigest = 0xcffdbe799aea11b4ull;
 }

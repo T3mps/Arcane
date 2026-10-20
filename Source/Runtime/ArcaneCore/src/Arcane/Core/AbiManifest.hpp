@@ -21,22 +21,26 @@
 // for aliases such as std::int64_t, which would make a Linux --check disagree
 // with a Windows --write.
 //
-// OPAQUE RECORDS. A record that holds a standard-library or Astra container
-// (std::string, std::vector, std::function, Astra::FlatMap, ...) has a
-// sizeof / alignof / offsetof that moves with the configuration (MSVC
-// _ITERATOR_DEBUG_LEVEL: Debug and Release disagree) and with the standard
-// library. One build/abi-digest.txt must hold for every configuration, so such
-// a record, and every field whose own type is a library type, is hashed with
-// those three numbers replaced by 0 (Opaque()). Its type name, field names,
-// field order and declared type names are still hashed, so adding, removing,
-// reordering or retyping a field still moves the digest. The offsetof /
-// sizeof expressions stay in the source (wrapped in Opaque()) so the compiler
-// still proves every field exists and is accessible.
+// OPAQUE FROM THE FIRST CONTAINER. A record that holds a standard-library or
+// Astra container (std::string, std::vector, std::function, Astra::FlatMap,
+// ...) has a sizeof / alignof / offsetof that moves with the configuration
+// (MSVC _ITERATOR_DEBUG_LEVEL: Debug and Release disagree) and with the
+// standard library. One build/abi-digest.txt must hold for every configuration,
+// so members BEFORE the first container hash their real offset, size and
+// alignment; the first container and every member after it hash those numbers
+// as 0 (Opaque()), and so does the record's own sizeof / alignof. Names, field
+// order and declared type names are always hashed, so adding, removing,
+// reordering or retyping a field still moves the digest, and an int added
+// before the first container shifts a real offset. The offsetof / sizeof
+// expressions stay in the source (wrapped in Opaque()) so the compiler still
+// proves every field exists and is accessible. Private members are reached
+// through the friend Access struct below.
 //
 // This function is constexpr and header-defined, and it is NOT ARC_CORE_API: in
 // a modular game TU that macro is __declspec(dllimport), and a game compiles
 // its own body so ASTRA_ENTITY_BITS=64 changes ITS value.
 
+#include <Arcane/Core/AbiAccess.hpp>
 #include <Arcane/Core/Api.hpp>
 
 #include <Arcane/Base/Assert.hpp>
@@ -60,6 +64,10 @@
 #include <Arcane/Scene/SceneCacheRecords.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
 #include <Arcane/Scene/TransformSystems.hpp>
+#include <Arcane/Scene/ViewTransform.hpp>
+#include <Arcane/Math/Aabb.hpp>
+#include <Arcane/Mesh/MeshAsset.hpp>
+#include <Arcane/Mesh/MeshBuilder.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -118,6 +126,62 @@ namespace Arcane
         // (see OPAQUE RECORDS above). Evaluating the argument keeps the
         // compiler checking the expression.
         constexpr std::uint64_t Opaque(std::size_t) noexcept { return 0; }
+
+        // Hashes the PRIVATE members of the classes that befriend this struct
+        // (friend struct ::Arcane::Detail::AbiManifest::Access;). Game code
+        // compiles those classes' inline accessors, so a private member's
+        // offset is ABI. Opaque() applies from the first library container on.
+        struct Access
+        {
+        static constexpr void R_GameModule(Fnv& f) noexcept
+        {
+            f.Type("Arcane::GameModule", sizeof(Arcane::GameModule), alignof(Arcane::GameModule));
+            f.Field("m_ctx", offsetof(Arcane::GameModule, m_ctx), sizeof(Arcane::GameModule::m_ctx), alignof(decltype(Arcane::GameModule::m_ctx)), "EngineContext*");
+            f.Field("m_components", offsetof(Arcane::GameModule, m_components), sizeof(Arcane::GameModule::m_components), alignof(decltype(Arcane::GameModule::m_components)), "Arcane::ComponentModule*");
+        }
+
+        static constexpr void R_SystemFactoryTable(Fnv& f) noexcept
+        {
+            f.Type("Arcane::SystemFactoryTable", Opaque(sizeof(Arcane::SystemFactoryTable)), Opaque(alignof(Arcane::SystemFactoryTable)));
+            f.Field("m_entries", Opaque(offsetof(Arcane::SystemFactoryTable, m_entries)), Opaque(sizeof(Arcane::SystemFactoryTable::m_entries)), Opaque(alignof(decltype(Arcane::SystemFactoryTable::m_entries))), "std::vector<SystemFactoryEntry>");
+            f.Field("m_openOwner", Opaque(offsetof(Arcane::SystemFactoryTable, m_openOwner)), sizeof(Arcane::SystemFactoryTable::m_openOwner), alignof(decltype(Arcane::SystemFactoryTable::m_openOwner)), "const void*");
+        }
+
+        static constexpr void R_Runtime(Fnv& f) noexcept
+        {
+            f.Type("Arcane::Runtime", sizeof(Arcane::Runtime), alignof(Arcane::Runtime));
+            f.Field("m_impl", offsetof(Arcane::Runtime, m_impl), sizeof(Arcane::Runtime::m_impl), alignof(decltype(Arcane::Runtime::m_impl)), "std::unique_ptr<Impl>");
+        }
+
+        static constexpr void R_ProcessContext(Fnv& f) noexcept
+        {
+            f.Type("Arcane::ProcessContext", Opaque(sizeof(Arcane::ProcessContext)), Opaque(alignof(Arcane::ProcessContext)));
+            f.Field("m_owned", offsetof(Arcane::ProcessContext, m_owned), sizeof(Arcane::ProcessContext::m_owned), alignof(decltype(Arcane::ProcessContext::m_owned)), "std::unique_ptr<Arcane::TypeContext>");
+            f.Field("m_context", offsetof(Arcane::ProcessContext, m_context), sizeof(Arcane::ProcessContext::m_context), alignof(decltype(Arcane::ProcessContext::m_context)), "Arcane::TypeContext*");
+            f.Field("m_factories", Opaque(offsetof(Arcane::ProcessContext, m_factories)), Opaque(sizeof(Arcane::ProcessContext::m_factories)), Opaque(alignof(decltype(Arcane::ProcessContext::m_factories))), "SystemFactoryTable");
+            f.Field("m_dedicated", Opaque(offsetof(Arcane::ProcessContext, m_dedicated)), sizeof(Arcane::ProcessContext::m_dedicated), alignof(decltype(Arcane::ProcessContext::m_dedicated)), "bool");
+            f.Field("m_slotHeld", Opaque(offsetof(Arcane::ProcessContext, m_slotHeld)), sizeof(Arcane::ProcessContext::m_slotHeld), alignof(decltype(Arcane::ProcessContext::m_slotHeld)), "bool");
+        }
+
+        static constexpr void R_PhysicsWorld2D(Fnv& f) noexcept
+        {
+            f.Type("Arcane::PhysicsWorld2D", Opaque(sizeof(Arcane::PhysicsWorld2D)), Opaque(alignof(Arcane::PhysicsWorld2D)));
+            f.Field("world", offsetof(Arcane::PhysicsWorld2D, world), sizeof(Arcane::PhysicsWorld2D::world), alignof(decltype(Arcane::PhysicsWorld2D::world)), "std::unique_ptr<Detail::Physics2D::PhysicsWorld>");
+            f.Field("entityToBody", Opaque(offsetof(Arcane::PhysicsWorld2D, entityToBody)), Opaque(sizeof(Arcane::PhysicsWorld2D::entityToBody)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::entityToBody))), "std::unordered_map<Arcane::Entity, Detail::Physics2D::BodyHandle>");
+            f.Field("lastReconcile", Opaque(offsetof(Arcane::PhysicsWorld2D, lastReconcile)), sizeof(Arcane::PhysicsWorld2D::lastReconcile), alignof(decltype(Arcane::PhysicsWorld2D::lastReconcile)), "Arcane::Tick");
+            f.Field("reconciled", Opaque(offsetof(Arcane::PhysicsWorld2D, reconciled)), sizeof(Arcane::PhysicsWorld2D::reconciled), alignof(decltype(Arcane::PhysicsWorld2D::reconciled)), "std::uint32_t");
+            f.Field("bodyRecords", Opaque(offsetof(Arcane::PhysicsWorld2D, bodyRecords)), Opaque(sizeof(Arcane::PhysicsWorld2D::bodyRecords)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::bodyRecords))), "std::unordered_map<std::uint64_t, Detail::Physics2D::BodyRecord>");
+            f.Field("stepEvents", Opaque(offsetof(Arcane::PhysicsWorld2D, stepEvents)), Opaque(sizeof(Arcane::PhysicsWorld2D::stepEvents)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::stepEvents))), "Detail::Physics2D::EventBuffers");
+            f.Field("frameEvents", Opaque(offsetof(Arcane::PhysicsWorld2D, frameEvents)), Opaque(sizeof(Arcane::PhysicsWorld2D::frameEvents)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::frameEvents))), "Detail::Physics2D::EventBuffers");
+        }
+
+        static constexpr void R_PhysicsSystem2D(Fnv& f) noexcept
+        {
+            f.Type("Arcane::PhysicsSystem2D", sizeof(Arcane::PhysicsSystem2D), alignof(Arcane::PhysicsSystem2D));
+            f.Field("m_fixedDt", offsetof(Arcane::PhysicsSystem2D, m_fixedDt), sizeof(Arcane::PhysicsSystem2D::m_fixedDt), alignof(decltype(Arcane::PhysicsSystem2D::m_fixedDt)), "float");
+            f.Field("m_stepWorld", offsetof(Arcane::PhysicsSystem2D, m_stepWorld), sizeof(Arcane::PhysicsSystem2D::m_stepWorld), alignof(decltype(Arcane::PhysicsSystem2D::m_stepWorld)), "bool");
+        }
+        };
     }
 
     constexpr std::uint64_t AbiManifestMix() noexcept
@@ -128,10 +192,39 @@ namespace Arcane
         f.Define("ASTRA_ENTITY_BITS", static_cast<std::uint64_t>(ASTRA_ENTITY_BITS));
         f.Define("ASTRA_ENTITY_VERSION_BITS", static_cast<std::uint64_t>(ASTRA_ENTITY_VERSION_BITS));
         f.Define("ASTRA_MAX_COMPONENTS", static_cast<std::uint64_t>(ASTRA_MAX_COMPONENTS));
+
         f.Type("Astra::Entity", sizeof(Astra::Entity), alignof(Astra::Entity));
         f.Type("Arcane::Guid", sizeof(Arcane::Guid), alignof(Arcane::Guid));
         f.Field("hi", offsetof(Arcane::Guid, hi), sizeof(Arcane::Guid::hi), alignof(decltype(Arcane::Guid::hi)), "std::uint64_t");
         f.Field("lo", offsetof(Arcane::Guid, lo), sizeof(Arcane::Guid::lo), alignof(decltype(Arcane::Guid::lo)), "std::uint64_t");
+        f.Type("Arcane::Aabb", sizeof(Arcane::Aabb), alignof(Arcane::Aabb));
+        f.Field("min", offsetof(Arcane::Aabb, min), sizeof(Arcane::Aabb::min), alignof(decltype(Arcane::Aabb::min)), "glm::vec3");
+        f.Field("max", offsetof(Arcane::Aabb, max), sizeof(Arcane::Aabb::max), alignof(decltype(Arcane::Aabb::max)), "glm::vec3");
+        f.Type("Arcane::ViewTransform", sizeof(Arcane::ViewTransform), alignof(Arcane::ViewTransform));
+        f.Field("view", offsetof(Arcane::ViewTransform, view), sizeof(Arcane::ViewTransform::view), alignof(decltype(Arcane::ViewTransform::view)), "glm::mat4");
+        f.Field("projection", offsetof(Arcane::ViewTransform, projection), sizeof(Arcane::ViewTransform::projection), alignof(decltype(Arcane::ViewTransform::projection)), "glm::mat4");
+        f.Field("viewport", offsetof(Arcane::ViewTransform, viewport), sizeof(Arcane::ViewTransform::viewport), alignof(decltype(Arcane::ViewTransform::viewport)), "glm::uvec2");
+        f.Type("Arcane::MeshVertex", sizeof(Arcane::MeshVertex), alignof(Arcane::MeshVertex));
+        f.Field("position", offsetof(Arcane::MeshVertex, position), sizeof(Arcane::MeshVertex::position), alignof(decltype(Arcane::MeshVertex::position)), "glm::vec3");
+        f.Field("normal", offsetof(Arcane::MeshVertex, normal), sizeof(Arcane::MeshVertex::normal), alignof(decltype(Arcane::MeshVertex::normal)), "glm::vec3");
+        f.Field("uv", offsetof(Arcane::MeshVertex, uv), sizeof(Arcane::MeshVertex::uv), alignof(decltype(Arcane::MeshVertex::uv)), "glm::vec2");
+        f.Type("Arcane::MeshSection", Opaque(sizeof(Arcane::MeshSection)), Opaque(alignof(Arcane::MeshSection)));
+        f.Field("name", Opaque(offsetof(Arcane::MeshSection, name)), Opaque(sizeof(Arcane::MeshSection::name)), Opaque(alignof(decltype(Arcane::MeshSection::name))), "std::string");
+        f.Field("indexOffset", Opaque(offsetof(Arcane::MeshSection, indexOffset)), sizeof(Arcane::MeshSection::indexOffset), alignof(decltype(Arcane::MeshSection::indexOffset)), "std::uint32_t");
+        f.Field("indexCount", Opaque(offsetof(Arcane::MeshSection, indexCount)), sizeof(Arcane::MeshSection::indexCount), alignof(decltype(Arcane::MeshSection::indexCount)), "std::uint32_t");
+        f.Field("slotIndex", Opaque(offsetof(Arcane::MeshSection, slotIndex)), sizeof(Arcane::MeshSection::slotIndex), alignof(decltype(Arcane::MeshSection::slotIndex)), "std::uint32_t");
+        f.Type("Arcane::MeshData", Opaque(sizeof(Arcane::MeshData)), Opaque(alignof(Arcane::MeshData)));
+        f.Field("vertices", Opaque(offsetof(Arcane::MeshData, vertices)), Opaque(sizeof(Arcane::MeshData::vertices)), Opaque(alignof(decltype(Arcane::MeshData::vertices))), "std::vector<MeshVertex>");
+        f.Field("indices", Opaque(offsetof(Arcane::MeshData, indices)), Opaque(sizeof(Arcane::MeshData::indices)), Opaque(alignof(decltype(Arcane::MeshData::indices))), "std::vector<std::uint32_t>");
+        f.Field("sections", Opaque(offsetof(Arcane::MeshData, sections)), Opaque(sizeof(Arcane::MeshData::sections)), Opaque(alignof(decltype(Arcane::MeshData::sections))), "std::vector<MeshSection>");
+        f.Type("Arcane::MeshSlot", Opaque(sizeof(Arcane::MeshSlot)), Opaque(alignof(Arcane::MeshSlot)));
+        f.Field("name", Opaque(offsetof(Arcane::MeshSlot, name)), Opaque(sizeof(Arcane::MeshSlot::name)), Opaque(alignof(decltype(Arcane::MeshSlot::name))), "std::string");
+        f.Field("material", Opaque(offsetof(Arcane::MeshSlot, material)), sizeof(Arcane::MeshSlot::material), alignof(decltype(Arcane::MeshSlot::material)), "Guid");
+        f.Type("Arcane::MeshSource", sizeof(Arcane::MeshSource), alignof(Arcane::MeshSource));
+        Detail::AbiManifest::Access::R_GameModule(f);
+        Detail::AbiManifest::Access::R_SystemFactoryTable(f);
+        Detail::AbiManifest::Access::R_Runtime(f);
+        f.Type("Arcane::ClientRuntime", Opaque(sizeof(Arcane::ClientRuntime)), Opaque(alignof(Arcane::ClientRuntime)));
         f.Type("Arcane::EngineContext", sizeof(Arcane::EngineContext), alignof(Arcane::EngineContext));
         f.Field("abiVersion", offsetof(Arcane::EngineContext, abiVersion), sizeof(Arcane::EngineContext::abiVersion), alignof(decltype(Arcane::EngineContext::abiVersion)), "uint32_t");
         f.Field("typeContext", offsetof(Arcane::EngineContext, typeContext), sizeof(Arcane::EngineContext::typeContext), alignof(decltype(Arcane::EngineContext::typeContext)), "Arcane::TypeContext*");
@@ -157,7 +250,7 @@ namespace Arcane
         f.Type("Arcane::ProcessContextDesc", sizeof(Arcane::ProcessContextDesc), alignof(Arcane::ProcessContextDesc));
         f.Field("isDedicatedServerProcess", offsetof(Arcane::ProcessContextDesc, isDedicatedServerProcess), sizeof(Arcane::ProcessContextDesc::isDedicatedServerProcess), alignof(decltype(Arcane::ProcessContextDesc::isDedicatedServerProcess)), "bool");
         f.Field("externalTypeContext", offsetof(Arcane::ProcessContextDesc, externalTypeContext), sizeof(Arcane::ProcessContextDesc::externalTypeContext), alignof(decltype(Arcane::ProcessContextDesc::externalTypeContext)), "Arcane::TypeContext*");
-        f.Type("Arcane::ProcessContext", Opaque(sizeof(Arcane::ProcessContext)), Opaque(alignof(Arcane::ProcessContext)));
+        Detail::AbiManifest::Access::R_ProcessContext(f);
         f.Type("Arcane::SystemFactoryEntry", Opaque(sizeof(Arcane::SystemFactoryEntry)), Opaque(alignof(Arcane::SystemFactoryEntry)));
         f.Field("name", Opaque(offsetof(Arcane::SystemFactoryEntry, name)), Opaque(sizeof(Arcane::SystemFactoryEntry::name)), Opaque(alignof(decltype(Arcane::SystemFactoryEntry::name))), "std::string");
         f.Field("mask", Opaque(offsetof(Arcane::SystemFactoryEntry, mask)), sizeof(Arcane::SystemFactoryEntry::mask), alignof(decltype(Arcane::SystemFactoryEntry::mask)), "RoleMask");
@@ -180,9 +273,9 @@ namespace Arcane
         f.Field("instance", offsetof(Arcane::GameModuleDetail::State, instance), sizeof(Arcane::GameModuleDetail::State::instance), alignof(decltype(Arcane::GameModuleDetail::State::instance)), "GameModule*");
         f.Type("Arcane::Assert::EnsureScope", sizeof(Arcane::Assert::EnsureScope), alignof(Arcane::Assert::EnsureScope));
         f.Type("Arcane::LogRecord", Opaque(sizeof(Arcane::LogRecord)), Opaque(alignof(Arcane::LogRecord)));
-        f.Field("seq", Opaque(offsetof(Arcane::LogRecord, seq)), sizeof(Arcane::LogRecord::seq), alignof(decltype(Arcane::LogRecord::seq)), "std::uint64_t");
-        f.Field("unixMs", Opaque(offsetof(Arcane::LogRecord, unixMs)), sizeof(Arcane::LogRecord::unixMs), alignof(decltype(Arcane::LogRecord::unixMs)), "std::int64_t");
-        f.Field("level", Opaque(offsetof(Arcane::LogRecord, level)), sizeof(Arcane::LogRecord::level), alignof(decltype(Arcane::LogRecord::level)), "int");
+        f.Field("seq", offsetof(Arcane::LogRecord, seq), sizeof(Arcane::LogRecord::seq), alignof(decltype(Arcane::LogRecord::seq)), "std::uint64_t");
+        f.Field("unixMs", offsetof(Arcane::LogRecord, unixMs), sizeof(Arcane::LogRecord::unixMs), alignof(decltype(Arcane::LogRecord::unixMs)), "std::int64_t");
+        f.Field("level", offsetof(Arcane::LogRecord, level), sizeof(Arcane::LogRecord::level), alignof(decltype(Arcane::LogRecord::level)), "int");
         f.Field("logger", Opaque(offsetof(Arcane::LogRecord, logger)), Opaque(sizeof(Arcane::LogRecord::logger)), Opaque(alignof(decltype(Arcane::LogRecord::logger))), "std::string");
         f.Field("text", Opaque(offsetof(Arcane::LogRecord, text)), Opaque(sizeof(Arcane::LogRecord::text)), Opaque(alignof(decltype(Arcane::LogRecord::text))), "std::string");
         f.Type("Arcane::LogSubscription", sizeof(Arcane::LogSubscription), alignof(Arcane::LogSubscription));
@@ -269,7 +362,7 @@ namespace Arcane
         f.Field("nearZ", offsetof(Arcane::Camera, nearZ), sizeof(Arcane::Camera::nearZ), alignof(decltype(Arcane::Camera::nearZ)), "float");
         f.Field("farZ", offsetof(Arcane::Camera, farZ), sizeof(Arcane::Camera::farZ), alignof(decltype(Arcane::Camera::farZ)), "float");
         f.Type("Arcane::Identity", Opaque(sizeof(Arcane::Identity)), Opaque(alignof(Arcane::Identity)));
-        f.Field("id", Opaque(offsetof(Arcane::Identity, id)), sizeof(Arcane::Identity::id), alignof(decltype(Arcane::Identity::id)), "Guid");
+        f.Field("id", offsetof(Arcane::Identity, id), sizeof(Arcane::Identity::id), alignof(decltype(Arcane::Identity::id)), "Guid");
         f.Field("name", Opaque(offsetof(Arcane::Identity, name)), Opaque(sizeof(Arcane::Identity::name)), Opaque(alignof(decltype(Arcane::Identity::name))), "std::string");
         f.Type("Arcane::Hidden", sizeof(Arcane::Hidden), alignof(Arcane::Hidden));
         f.Type("Arcane::TransformOrder", Opaque(sizeof(Arcane::TransformOrder)), Opaque(alignof(Arcane::TransformOrder)));
@@ -359,8 +452,8 @@ namespace Arcane
         f.Field("handle", offsetof(Arcane::Detail::Physics2D::RetiredFixture, handle), sizeof(Arcane::Detail::Physics2D::RetiredFixture::handle), alignof(decltype(Arcane::Detail::Physics2D::RetiredFixture::handle)), "FixtureHandle");
         f.Field("index", offsetof(Arcane::Detail::Physics2D::RetiredFixture, index), sizeof(Arcane::Detail::Physics2D::RetiredFixture::index), alignof(decltype(Arcane::Detail::Physics2D::RetiredFixture::index)), "std::uint32_t");
         f.Type("Arcane::Detail::Physics2D::BodyRecord", Opaque(sizeof(Arcane::Detail::Physics2D::BodyRecord)), Opaque(alignof(Arcane::Detail::Physics2D::BodyRecord)));
-        f.Field("entity", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, entity)), sizeof(Arcane::Detail::Physics2D::BodyRecord::entity), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::entity)), "Arcane::Entity");
-        f.Field("guid", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, guid)), sizeof(Arcane::Detail::Physics2D::BodyRecord::guid), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::guid)), "Arcane::Guid");
+        f.Field("entity", offsetof(Arcane::Detail::Physics2D::BodyRecord, entity), sizeof(Arcane::Detail::Physics2D::BodyRecord::entity), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::entity)), "Arcane::Entity");
+        f.Field("guid", offsetof(Arcane::Detail::Physics2D::BodyRecord, guid), sizeof(Arcane::Detail::Physics2D::BodyRecord::guid), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::guid)), "Arcane::Guid");
         f.Field("fixtures", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, fixtures)), Opaque(sizeof(Arcane::Detail::Physics2D::BodyRecord::fixtures)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::fixtures))), "std::vector<FixtureHandle>");
         f.Field("retired", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, retired)), sizeof(Arcane::Detail::Physics2D::BodyRecord::retired), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::retired)), "bool");
         f.Field("retiredFixtures", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, retiredFixtures)), Opaque(sizeof(Arcane::Detail::Physics2D::BodyRecord::retiredFixtures)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::retiredFixtures))), "std::vector<RetiredFixture>");
@@ -370,8 +463,8 @@ namespace Arcane
         f.Field("contactHit", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, contactHit)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::contactHit)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::contactHit))), "std::vector<Arcane::ContactHit2D>");
         f.Field("sensorBegin", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, sensorBegin)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::sensorBegin)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::sensorBegin))), "std::vector<Arcane::SensorBegin2D>");
         f.Field("sensorEnd", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, sensorEnd)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::sensorEnd)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::sensorEnd))), "std::vector<Arcane::SensorEnd2D>");
-        f.Type("Arcane::PhysicsWorld2D", Opaque(sizeof(Arcane::PhysicsWorld2D)), Opaque(alignof(Arcane::PhysicsWorld2D)));
-        f.Type("Arcane::PhysicsSystem2D", sizeof(Arcane::PhysicsSystem2D), alignof(Arcane::PhysicsSystem2D));
+        Detail::AbiManifest::Access::R_PhysicsWorld2D(f);
+        Detail::AbiManifest::Access::R_PhysicsSystem2D(f);
 
         return f.h;
     }

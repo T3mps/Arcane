@@ -12,6 +12,7 @@
 // A consumer that never builds a Runtime -- arcbuild, arccook -- creates no
 // ProcessContext and touches no ComponentRegistry; this class documents that
 // limit rather than enforcing it (there is nothing to enforce against).
+#include <Arcane/Core/AbiAccess.hpp>
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/EcsFwd.hpp>                 // Arcane::TypeContext (declared, aliased)
 #include <Arcane/Plugin/SystemFactory.hpp>   // SystemFactoryTable (a by-value member)
@@ -48,6 +49,7 @@ namespace Arcane
         // this context instantiates the subset matching its own NetMode.
         [[nodiscard]] SystemFactoryTable& SystemFactories() noexcept { return m_factories; }
     private:
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
         explicit ProcessContext(const ProcessContextDesc& desc);
         std::unique_ptr<::Arcane::TypeContext> m_owned;    // null when adopting
         ::Arcane::TypeContext*                 m_context = nullptr;

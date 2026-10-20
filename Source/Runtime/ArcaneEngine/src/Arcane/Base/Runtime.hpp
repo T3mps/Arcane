@@ -14,6 +14,7 @@
 // attaches itself here. ArcaneServer, a bare Runtime in a test, and the editor's
 // embedded server world run with no client at all.
 
+#include <Arcane/Core/AbiAccess.hpp>
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Ecs.hpp>   // the Arcane:: names (aliases) this header's declarations spell; Result is by value
 #include <Arcane/Guid.hpp>
@@ -393,6 +394,7 @@ namespace Arcane
         [[nodiscard]] glm::vec2 ResolvedGravity() const;
 
     private:
+        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Core/AbiManifest.hpp)
         struct Impl;
         std::unique_ptr<Impl> m_impl;
     };

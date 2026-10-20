@@ -714,6 +714,102 @@ project "arcane-abi-digest"
     filter {}
 
 -- ============================================================================
+-- arcane-abi-digest-mutants: the digest's mutation witness (Plan B Task 1, fix
+-- round 1). At GENERATE time premake writes shadow copies of three listed
+-- headers (ProcessContext.hpp, Aabb.hpp, ViewTransform.hpp) into
+-- Intermediate/AbiDigest/mutants, ahead of the real include dirs. Each shadow
+-- carries one mutation behind a macro (a private int before the first
+-- container; a same-size field swap) plus an unconditional comment line. One
+-- TU per macro bakes that variant's mix; the exe prints `name hex` per variant
+-- and AbiDigestTest.cpp requires base == the real mix (a comment moves
+-- nothing) and every mutant != base. An anchor that no longer matches fails
+-- the generate loudly: update the anchor, never the test.
+-- ============================================================================
+local function abi_shadow(rel, edits)
+    local src = path.join(_MAIN_SCRIPT_DIR, rel)
+    local text = assert(io.readfile(src), "abi shadow: cannot read " .. src)
+    for _, e in ipairs(edits) do
+        local from, to = text:find(e[1], 1, true)
+        if not from then error("abi shadow: anchor not found in " .. rel .. ": " .. e[1]) end
+        text = text:sub(1, from - 1) .. e[2] .. text:sub(to + 1)
+    end
+    local name = rel:match("/src/(.*)$")
+    local dest = path.join(_MAIN_SCRIPT_DIR, "Intermediate/AbiDigest/mutants", name)
+    os.mkdir(path.getdirectory(dest))
+    assert(io.writefile(dest, text))
+end
+abi_shadow("Source/Runtime/ArcaneEngine/src/Arcane/Base/ProcessContext.hpp", {
+    { "std::unique_ptr<::Arcane::TypeContext> m_owned;",
+      "// abi mutant: a comment-only line, must not move the digest\n#ifdef ABI_MUT_PROCESS_PRIVATE\n        int m_abiProbe = 0;\n#endif\n        std::unique_ptr<::Arcane::TypeContext> m_owned;" },
+})
+abi_shadow("Source/Runtime/ArcaneCore/src/Arcane/Math/Aabb.hpp", {
+    { "glm::vec3 min{0.0f, 0.0f, 0.0f};",
+      "#ifndef ABI_MUT_AABB_SWAP\n        glm::vec3 min{0.0f, 0.0f, 0.0f};\n#endif" },
+    { "glm::vec3 max{0.0f, 0.0f, 0.0f};",
+      "glm::vec3 max{0.0f, 0.0f, 0.0f};\n#ifdef ABI_MUT_AABB_SWAP\n        glm::vec3 min{0.0f, 0.0f, 0.0f};\n#endif" },
+})
+abi_shadow("Source/Runtime/ArcaneScene/src/Arcane/Scene/ViewTransform.hpp", {
+    { "glm::mat4  view{1.0f};",
+      "#ifndef ABI_MUT_VIEW_SWAP\n        glm::mat4  view{1.0f};\n#endif" },
+    { "glm::mat4  projection{1.0f};",
+      "glm::mat4  projection{1.0f};\n#ifdef ABI_MUT_VIEW_SWAP\n        glm::mat4  view{1.0f};\n#endif" },
+})
+
+group "Programs"
+project "arcane-abi-digest-mutants"
+    includedirs { "%{wks.location}/Intermediate/AbiDigest/mutants" }   -- the shadow headers win
+    arc_module_consumer(engine_modules, engine_modules.order, { link = false, stage = false })
+    arc_module_consumer(engine_modules, { "ArcaneCore" })
+    location "Source/Programs/arcane-abi-digest-mutants"
+    kind "ConsoleApp"
+    language "C++"
+    cppdialect "C++23"
+    staticruntime "off"
+
+    targetdir ("Binaries/" .. outputdir .. "/%{prj.name}")
+    objdir ("Intermediate/Build/" .. outputdir .. "/%{prj.name}")
+
+    files {
+        "%{prj.location}/src/**.hpp",
+        "%{prj.location}/src/**.cpp",
+    }
+
+    defines {
+        "ARC_MODULE_NAME=ArcaneAbiDigestMutants",
+        "_CRT_SECURE_NO_WARNINGS",
+        "_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING",
+        "NOMINMAX",
+        "WIN32_LEAN_AND_MEAN",
+    }
+
+    filter "system:windows"
+        systemversion "latest"
+        buildoptions { "/utf-8", "/Zc:__cplusplus", "/bigobj", "/arch:AVX2" }
+        fatalwarnings { "4715" }
+    filter { "system:linux or system:macosx", "architecture:x86_64" }
+        buildoptions { "-mavx2", "-mfma" }
+    filter "system:not windows"
+        links { "dl", "pthread" }
+
+    filter "configurations:Debug"
+        defines { "ARC_BUILD_DEBUG" }
+        runtime "Debug"
+        symbols "on"
+
+    filter "configurations:Release"
+        defines { "ARC_BUILD_RELEASE", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "on"
+
+    filter "configurations:Dist"
+        defines { "ARC_BUILD_DIST", "NDEBUG" }
+        runtime "Release"
+        optimize "speed"
+        symbols "off"
+    filter {}
+
+-- ============================================================================
 -- Servitor (servitor): the loopback CLI that attaches to running engine hosts
 -- (spec docs/superpowers/specs/2026-10-05-arc-cli-design.md, plan rev 8.3).
 -- The client is program code (namespace Servitor, no export macro) and links
@@ -2004,9 +2100,9 @@ project "ArcaneTests"
     -- "../ArcaneCrashReporter/ArcaneCrashReporter.exe" directly (Task 5).
     -- death-fixture builds for every target since the Diagnostics POSIX port.
     dependson { "death-fixture" }
-    -- AbiDigestTest.cpp ([abi]) runs arcane-abi-digest.exe (../arcane-abi-digest/) for the
-    -- comment-stability case; it must be built first.
-    dependson { "arcane-abi-digest" }
+    -- AbiDigestTest.cpp ([abi]) runs arcane-abi-digest.exe and arcane-abi-digest-mutants.exe
+    -- (sibling dirs) for the comment-stability and mutation cases; build them first.
+    dependson { "arcane-abi-digest", "arcane-abi-digest-mutants" }
     if os.target() == "windows" then
         dependson { "arcbuild-process-fixture", "ArcaneCrashReporter" }
     end
