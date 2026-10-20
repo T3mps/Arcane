@@ -27,10 +27,14 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "Helpers/ConstantScan.hpp"   // Arcane::Test::RepoRoot
 
 namespace fs = std::filesystem;
 using namespace Arcane::AssetPipeline;
@@ -450,5 +454,55 @@ TEST_CASE("CookQueue + AssetPanelModel: a mesh recorded Queued mid-pass reads Co
     CHECK(model.Health().cooked == 1);
 
     fs::remove_all(content, ec);
+    fs::remove_all(project, ec);
+}
+
+TEST_CASE("CookQueue's destructor waits with a deadline", "[editor][cook]") {
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/Project/CookQueue.cpp",
+                     std::ios::binary);
+    REQUIRE(in.good());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string text = ss.str();
+    const auto dtor = text.find("CookQueue::~CookQueue()");
+    REQUIRE(dtor != std::string::npos);
+    const auto next = text.find("void CookQueue::", dtor + 1);
+    REQUIRE(next != std::string::npos);
+    const auto body = text.substr(dtor, next - dtor);
+    CHECK(body.find("sleep_for") != std::string::npos);
+    CHECK(body.find("abort") != std::string::npos);
+    CHECK(body.find("yield") == std::string::npos);
+}
+
+TEST_CASE("CookQueue: a throwing cook is reported as a failure and the queue still destroys", "[editor][cook]")
+{
+    const fs::path project = TempProjectDir("throwing_importer");
+    const fs::path png = project / "Content" / "textures" / "a.png";
+    WritePngFile(png, 4, 4, SolidPixels(4, 4, 9, 9, 9, 255));
+    WriteMetaSidecar(png, Guid::Generate());
+
+    ManualSubmit submit;
+    std::vector<CookResult> delivered;
+    {
+        CookQueue queue(project, [&submit](std::function<void()> job) { submit(std::move(job)); });
+        queue.SetImporterForTesting(
+            [](std::span<const std::byte>, const Guid&, const TextureMetaSettings&) -> std::optional<ImportedTexture>
+            {
+                throw std::runtime_error("boom");
+            });
+        queue.SetOnCookComplete([&](const CookResult& r) { delivered.push_back(r); });
+
+        queue.NoteChanged();
+        submit.RunNext();   // the catch keeps the exception inside the job
+        CHECK_FALSE(queue.CookPending());
+        queue.Pump();
+
+        REQUIRE(delivered.size() == 1u);
+        CHECK(delivered[0].failed >= 1u);
+        REQUIRE_FALSE(delivered[0].failures.empty());
+        CHECK(delivered[0].failures[0].second.find("boom") != std::string::npos);
+    }   // ~CookQueue returns: m_running was cleared on the throw path
+
+    std::error_code ec;
     fs::remove_all(project, ec);
 }

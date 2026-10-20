@@ -50,6 +50,7 @@
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
+#include <exception>
 #include <fstream>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/CVarDecl.hpp>
@@ -352,8 +353,22 @@ namespace Arcane::Editor
             {
                 Arcane::AssetPipeline::CookSession cookGate;
                 cookGate.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6
-                const Arcane::AssetPipeline::CookResult cookResult =
-                    cookGate.CookProject(cookProjectRoot);
+                Arcane::AssetPipeline::CookResult cookResult;
+                try
+                {
+                    cookResult = cookGate.CookProject(cookProjectRoot);
+                }
+                catch (const std::exception& ex)
+                {
+                    // A throwing cook is a failed cook: the gate below refuses.
+                    cookResult.failed = 1;
+                    ARC_ERROR("--compare '{}': the cook threw: {}", m_config.compareReference, ex.what());
+                }
+                catch (...)
+                {
+                    cookResult.failed = 1;
+                    ARC_ERROR("--compare '{}': the cook threw", m_config.compareReference);
+                }
                 if (cookResult.failed > 0)
                 {
                     ARC_ERROR("--compare '{}': {} content source(s) failed to cook -- refusing "
