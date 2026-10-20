@@ -43,6 +43,7 @@
 #include "App/DialogSlot.hpp"
 #include "App/InputEdges.hpp"
 #include "App/ModalErrorQueue.hpp"
+#include "App/ModalGate.hpp"
 #include "App/UndoSettings.hpp"           // m_undoLimitsApplied + ReadUndoLimits (editor.undo.*)
 #include "Scene/UndoGate.hpp"             // ResolveDocumentUndo (DocumentUndo)
 #include "Documents/DocumentHost.hpp"
@@ -152,6 +153,16 @@ namespace Arcane::Editor
         // Whether that hook has fired. Read by PumpFrameEvents; a plain
         // relaxed load per frame.
         [[nodiscard]] static bool CleanExitRequested() noexcept;
+
+#if !defined(ARC_BUILD_DIST)
+        // ---- Remote test probes (Dist-stripped) ------------------------------
+        // The ONLY code that touches m_modalErrors / m_createDialog /
+        // m_selection / m_undo / m_gizmoDrag / m_play for the editor.*.probe
+        // commands (Remote/*ProbeCommand.cpp). Main thread, inside DrainFrame.
+        bool                      ArmModalProbe();          // queue an error + open the create dialog; true when the dialog opened
+        void                      DismissModalProbe();      // the error modal's OK pop
+        [[nodiscard]] Arcane::Editor::ModalKind ModalProbeKind() const noexcept;   // the last DrawModals winner
+#endif
 
     private:
         // ---- Boot (EditorApp.cpp) -------------------------------------------
@@ -2365,6 +2376,9 @@ namespace Arcane::Editor
         // lock needed). Errors display one at a time, FIFO, instead of racing
         // for the popup stack.
         Arcane::Editor::ModalErrorQueue m_modalErrors;
+#if !defined(ARC_BUILD_DIST)
+        Arcane::Editor::ModalKind       m_modalDrawn = Arcane::Editor::ModalKind::None;   // DrawModals' latch (editor.modal.probe)
+#endif
 
         // ---- Asset file operations (T5 s7.3, s7.12) -------------------------
         // Declared AFTER m_undo so the executor (which holds *m_undo) destructs

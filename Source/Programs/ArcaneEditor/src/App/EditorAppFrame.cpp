@@ -21,6 +21,7 @@
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
 #include "Scene/SelectionOps.hpp"
 #include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
+#include "Remote/ModalProbeCommand.hpp"   // editor.modal.probe (review fix round 1, Task 5)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
@@ -2130,6 +2131,10 @@ namespace Arcane::Editor
         };
         Arcane::Editor::SetSelectionView(selectionView);
         Arcane::Editor::RegisterSelectionCommand();
+        // editor.modal.probe (Dist-stripped, test-only): arms the two competing
+        // dockspace modals so a Servitor run can witness the gate.
+        Arcane::Editor::SetModalProbeApp(this);
+        Arcane::Editor::RegisterModalProbeCommand();
     }
 #endif
 
@@ -3959,15 +3964,47 @@ namespace Arcane::Editor
         m_assetModel.Select(created);
     }
 
+#if !defined(ARC_BUILD_DIST)
+    // editor.modal.probe's only touch points (Remote/ModalProbeCommand.cpp). The
+    // probe is the sole caller; each runs inside DrainFrame, before DrawModals.
+    bool EditorApp::ArmModalProbe()
+    {
+        m_modalErrors.Push("Probe Error", "editor.modal.probe: a queued error that must draw before the create dialog.");
+        BeginCreateAsset(Arcane::Editor::CreateAssetRequest{ Arcane::Editor::CreateAssetKind::Material });
+        return m_createDialog.open;
+    }
+    void EditorApp::DismissModalProbe() { m_modalErrors.Pop(); }
+    Arcane::Editor::ModalKind EditorApp::ModalProbeKind() const noexcept { return m_modalDrawn; }
+#endif
+
     // Phase 15: the modals. Opened and drawn at DOCKSPACE level, outside any
     // panel window -- that is why they live here and not inside a panel draw.
     void EditorApp::DrawModals(LoopState& ls)
     {
+        // Unsaved-scene confirm's parked intent -- read once, ahead of every modal
+        // below, so the gate sees it. Every branch reads this same snapshot (a
+        // TakePending() mid-frame cannot change what either reads).
+        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
+
+        // ONE dockspace-level modal per frame (ModalGate.hpp): errors first, then
+        // the unsaved-scene confirm, then the create dialog. Every modal here
+        // re-arms itself the same way ("if (!IsPopupOpen(title)) OpenPopup(title)")
+        // and ImGui allows exactly ONE popup at a given stack level: two such
+        // modals up at once close each other every frame (OpenPopupEx ->
+        // ClosePopupToLevel(0)), which leaves both permanently `Appearing` and,
+        // under AlwaysAutoResize, permanently INVISIBLE. A loser's state is left
+        // untouched, so it draws again once the modals above it are clear.
+        const Arcane::Editor::ModalKind allowed = Arcane::Editor::ModalAllowed(
+            m_modalErrors.Front() != nullptr,
+            pending != Arcane::Editor::SceneIntent::None,
+            m_createDialog.open);
+
         // ONE error modal, FIFO off the queue (architecture pass sec 7). The title
         // is per-error so it stays honest about which action failed; Pop advances
         // to the next queued error on the following frame.
-        if (const Arcane::Editor::ModalError* err = m_modalErrors.Front())
+        if (allowed == Arcane::Editor::ModalKind::Error)
         {
+            const Arcane::Editor::ModalError* err = m_modalErrors.Front();
             if (!ImGui::IsPopupOpen(err->title.c_str()))
                 ImGui::OpenPopup(err->title.c_str());
             if (ImGui::BeginPopupModal(err->title.c_str(), nullptr,
@@ -3987,38 +4024,16 @@ namespace Arcane::Editor
             }
         }
 
-        // Unsaved-scene confirm's parked intent -- read here, ahead of the
-        // create dialog below, so the create dialog's starvation gate can see
-        // it too. Same snapshot is reused at the "Unsaved Scene" block further
-        // down (a TakePending() mid-frame cannot change what either reads).
-        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
-
         // The unified create dialog (asset-manager Plan 1 Task 12). A
         // dockspace-level modal like the two around it -- opened by the ONE
         // entry (BeginCreateAsset), dispatched by the ONE dispatcher
         // (ConsumeCreateResult), which is the whole of spec s7's "no creation
-        // path may bypass CreateAssetRequest".
-        //
-        // GATED ON AN EMPTY ERROR QUEUE **AND** ON NO PARKED SCENE INTENT --
-        // both load-bearing, not taste. Every modal in this function re-arms
-        // itself the same way ("if (!IsPopupOpen(title)) OpenPopup(title)"),
-        // and ImGui allows exactly ONE popup at a given stack level: two such
-        // modals up at once close each other every frame (OpenPopupEx ->
-        // ClosePopupToLevel(0)), which makes both permanently `Appearing` and
-        // therefore -- under AlwaysAutoResize, which hides an appearing window
-        // for one frame while it fits itself -- permanently INVISIBLE.
-        // Observed live: a queued "Open Project Failed" and this dialog
-        // starved each other to a blank screen. The "Unsaved Scene" modal just
-        // below has the identical re-arm shape and is reachable while the
-        // create dialog is open -- the OS window-close button reaches
-        // SceneSession and parks an Exit intent regardless of any ImGui modal
-        // on screen -- so it must be covered by the same gate or the two
-        // starve each other instead. Both a queued error and a parked scene
-        // intent are more urgent than a create dialog and must be resolved
-        // first, so the create dialog waits its turn either way (its state is
-        // untouched, so it draws again once both are clear).
-        if (m_createDialog.open && !m_modalErrors.Front() &&
-            pending == Arcane::Editor::SceneIntent::None)
+        // path may bypass CreateAssetRequest". It waits behind a queued error and
+        // a parked scene intent (the gate above): observed live, a queued "Open
+        // Project Failed" and this dialog starved each other to a blank screen,
+        // and the OS close button parks an Exit intent regardless of any ImGui
+        // modal on screen. Its state is untouched while it waits.
+        if (allowed == Arcane::Editor::ModalKind::CreateAsset)
         {
             if (const Arcane::Project* createProj = m_runtime->CurrentProject())
             {
@@ -4044,10 +4059,18 @@ namespace Arcane::Editor
         // reads that same snapshot, so a TakePending() mid-block cannot change
         // what the rest of the frame's UI thinks is pending.
         const bool isLaunch = (pending == Arcane::Editor::SceneIntent::LaunchStandalone);
-        if (pending != Arcane::Editor::SceneIntent::None &&
-            !ImGui::IsPopupOpen("Unsaved Scene"))
-            ImGui::OpenPopup("Unsaved Scene");
-        if (ImGui::BeginPopupModal("Unsaved Scene", nullptr,
+        if (allowed == Arcane::Editor::ModalKind::UnsavedScene)
+        {
+            if (!ImGui::IsPopupOpen("Unsaved Scene"))
+                ImGui::OpenPopup("Unsaved Scene");
+        }
+        // Drawn only when this modal won the gate, so a parked intent cannot
+        // re-arm while an error is up. The pending == None arm keeps an
+        // already-open popup reaching its CloseCurrentPopup below (the intent
+        // was taken outside it).
+        if ((allowed == Arcane::Editor::ModalKind::UnsavedScene ||
+             pending == Arcane::Editor::SceneIntent::None) &&
+            ImGui::BeginPopupModal("Unsaved Scene", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize))
         {
             if (pending == Arcane::Editor::SceneIntent::None)
@@ -4129,6 +4152,10 @@ namespace Arcane::Editor
             }
             ImGui::EndPopup();
         }
+
+#if !defined(ARC_BUILD_DIST)
+        m_modalDrawn = allowed;   // editor.modal.probe op=drawn reads the previous frame's winner
+#endif
     }
 
     // Phase 16: the Viewport panel itself. It samples the texture the render
