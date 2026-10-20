@@ -212,8 +212,8 @@ sessions and subagents, Grok, Codex/GPT, and any SDD implementer or reviewer.
   net. A Servitor check is the evidence that THIS change does what you claim.
   Put it in your report: the command, the exit code, and the result file paths.
 - **Core loop.**
-  `servitor --project ReferenceProject launch runtime --headless -- --fixed-time 0`
-  (`launch` takes no `--client`; it exits 2), then
+  `servitor --project ReferenceProject --client <your-agent-name> launch runtime --headless -- --fixed-time 0`
+  (`launch` and `status` take `--client` too; the host's descriptor records it), then
   `servitor --project ReferenceProject --client <your-agent-name> --host runtime wait settled`, then `screenshot window --out <png>` /
   `compare <lane> --source window` / `step N` / `entity get ...` /
   `ecs query ...` / `logs --level warn`, then `quit` what you launched.
@@ -221,7 +221,7 @@ sessions and subagents, Grok, Codex/GPT, and any SDD implementer or reviewer.
 - **Branch on the exit code.** 0 ok; 2 usage; 3 permission; 4 no host; 5 busy
   (safe to retry); 6 the command failed (read `errors[0].code`); 7 the host died;
   8 a check failed (that IS the finding).
-- **Rules.** Name yourself with `--client` on host calls; `launch` and `status` refuse it (exit 2). Launch your own `--headless` host;
+- **Rules.** Name yourself with `--client` on every call, `launch` and `status` included. `quit --client NAME` quits the hosts that client launched (several need `--yes`; none is exit 4), so launch and quit with the same name. Launch your own `--headless` host;
   never drive (`play`/`stop`/`quit`/`cvar set`) an editor the user has open.
   Never `--bless` through Servitor. `quit` every host you launched.
 - **Sandboxed CLIs.** Codex blocks loopback by default, so every call fails

@@ -30,7 +30,7 @@ namespace Arcane
             "crash-gpu", "hang-main", "frames", "report", "compare", "settle", "screenshot",
             "settle-timeout", "probe", "max-diff-pixels", "max-diff-pixel-ratio",
             "fixed-dt", "fixed-time", "pick-probe", "window-size",
-            "remote-descriptor", "remote-idle-exit",
+            "remote-descriptor", "remote-idle-exit", "client",
         };
         constexpr std::string_view kStripBareFlags[] = { "headless", "bless", "remote" };
 
@@ -65,7 +65,7 @@ namespace Arcane
                     continue;
                 arg.remove_prefix(2);
                 const std::string_view name = arg.substr(0, arg.find('='));
-                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit")
+                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit" || name == "client")
                     return true;
             }
             return false;
@@ -237,6 +237,8 @@ namespace Arcane
         cli.Option("remote-idle-exit", std::to_string(HostConfig{}.remoteIdleExitSeconds),
                                       "DEV: with --remote, exit after this many seconds with no remote "
                                       "request (0 = never)");
+        cli.Option("client", "", "DEV: with --remote, the caller name recorded in the attach descriptor "
+                                 "(servitor launch --client NAME; empty = unnamed)");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -338,6 +340,7 @@ namespace Arcane
                                  "flag is not a descriptor path)\n");
             return { std::nullopt, 2 };
         }
+        cfg.remoteClient     = r.Get("client");
         cfg.remoteIdleExitSupplied = r.Supplied("remote-idle-exit");
         if (cfg.remoteIdleExitSupplied
             && !ParseIdleExitSeconds(r.Get("remote-idle-exit"), cfg.remoteIdleExitSeconds))

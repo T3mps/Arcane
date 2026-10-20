@@ -149,6 +149,9 @@ public:
         // have neither; their play axis is their tick gate (Tick()).
         bool (*modal)(void*) = nullptr;
         bool (*building)(void*) = nullptr;
+        // --client <name> (servitor launch --client NAME): the caller name Start
+        // writes into the descriptor and every heartbeat rewrites. Empty = unnamed.
+        std::string client;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started

@@ -41,6 +41,7 @@ namespace Arcane::Server
         std::string   remoteDescriptor;
         std::uint32_t remoteIdleExitSeconds  = 600;
         bool          remoteIdleExitSupplied = false;
+        std::string   remoteClient;   // --client <name>: the caller name recorded in the descriptor ("" = unnamed)
 
         // Forward-declared here so it names ServerConfig::ParseOutcome and can be
         // the return type of Parse; DEFINED below (after the class closes) because

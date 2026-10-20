@@ -464,4 +464,27 @@ TEST_CASE("the editor's arm attempts: only the first is the startup arm, armed o
     CHECK(Arming::Attempt(cvarOnly, Arcane::NetMode::Client, false) == Verdict::RefuseLog);
 }
 
+TEST_CASE("HostSession records its client in the descriptor at Start and on every rewrite", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    for (const std::string client : {std::string{}, std::string{"grok-review-r1"}}) {
+        INFO("client '" << client << "'");
+        Arcane::Test::TempDir tmp("remote-session-client");
+        auto cfg = ServerConfig(tmp.path);
+        cfg.client = client;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->client == client);
+        CHECK_FALSE(session.DrainFrame(1));
+        // The heartbeat rewrites the whole descriptor: remove it and force a rewrite.
+        std::error_code ec;
+        std::filesystem::remove(session.DescriptorFile(), ec);
+        session.MarkStopping();   // WriteHeartbeat, at once
+        desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->client == client);
+        session.Stop("test");
+    }
+}
 #endif

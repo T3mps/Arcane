@@ -880,6 +880,7 @@ void RuntimeApp::MainLoop()
         if (const Arcane::Project* proj = m_runtime->CurrentProject())
             rc.projectRoot    = proj->Root();
         rc.descriptorOverride = m_config.remoteDescriptor;
+        rc.client             = m_config.remoteClient;
         rc.idleExitSeconds    = remoteOpenEnded ? m_config.remoteIdleExitSeconds : 0u;
         rc.holdSim            = m_config.remote && m_config.maxFrames == 0;   // AM1: an open-ended run waits for play
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play", "problems", "scene", "stats" };

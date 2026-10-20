@@ -228,6 +228,53 @@ int RunFanOut(const VerbRow& row, std::span<const std::string> rest, const Globa
     return FanOutVerb(row, rest, opt, scan, &PostLive, &ctx, nullptr);
 }
 
+int QuitByClient(std::span<const std::string> rest, const GlobalOptions& opt, const std::filesystem::path& remoteDir,
+                 FanOutPost post, void* user, FanOutResult* captured)
+{
+    const VerbRow& row = *FindVerb("quit");
+    if (opt.pid != 0)
+        return PrintUsage("--client selects quit's hosts by launching client; it does not combine with --pid",
+                          opt.format);
+    const auto finish = [&](Arcane::Remote::Envelope env) {
+        const FanOutResult result = Refuse(std::move(env), nlohmann::json{{"command", "host.quit"}}, opt.format);
+        if (captured != nullptr) {
+            *captured = result;
+            return result.exitCode;
+        }
+        Printed printed;
+        printed.stdoutText = result.text;
+        printed.stderrText = result.diagnostics;
+        return Emit(printed, result.exitCode);
+    };
+
+    Scan scan;
+    scan.nowUnixMs = NowUnixMs();
+    for (LiveHost& host : HostsForClient(remoteDir, opt.client)) {
+        if (!Arcane::Remote::IsStale(host.descriptor))   // a host that already left needs no quit
+            scan.live.push_back(std::move(host));
+    }
+    if (scan.live.empty())
+        return finish(Arcane::Remote::MakeError("host.quit", "target.none",
+                                                "no live host was launched by client " + opt.client,
+                                                "servitor status lists the live hosts and their client"));
+    if (scan.live.size() > 1 && !opt.yes)
+        return finish(Arcane::Remote::MakeError(
+            "host.quit", "arg.inapplicable",
+            "--client " + opt.client + " matches " + std::to_string(scan.live.size()) + " hosts",
+            "pass --yes to quit all of them, or end one with --pid (and without --client)"));
+
+    GlobalOptions fan = opt;
+    fan.yes = true;   // one match, or the operator confirmed the several
+    LiveCtx ctx;
+    ctx.scan = &scan;
+    ctx.opt = opt;
+    if (post == nullptr) {
+        post = &PostLive;
+        user = &ctx;
+    }
+    return FanOutVerb(row, rest, fan, scan, post, user, captured);
+}
+
 int FanOutVerb(const VerbRow& row, std::span<const std::string> rest, const GlobalOptions& opt, const Scan& scan,
                FanOutPost post, void* user, FanOutResult* captured)
 {

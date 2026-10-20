@@ -9,6 +9,7 @@
 #include <Json.hpp>
 #include "RemoteTestHttp.hpp"   // UnusedLoopbackPort
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -370,4 +371,43 @@ TEST_CASE("a launched host not ready by --timeout is launch.timeout exit 8 namin
     CHECK(booting.errors[0].detail["state"] == "booting");
 }
 
+TEST_CASE("omitted --client is not forwarded to the host, and an explicit one is", "[servitor][client]") {
+    Arcane::Test::TempDir tmp("servitor-launch-client");
+    const auto exe = FakeHostExe(tmp.path / "engine", "ArcaneRuntime");
+    std::filesystem::create_directories(exe.parent_path());
+    std::ofstream(exe) << "not a program";
+    const auto project = MakeProject(tmp.path / "Game");
+    const auto has = [](const std::vector<std::string>& argv, const std::string& token) {
+        return std::find(argv.begin(), argv.end(), token) != argv.end();
+    };
+
+    const std::vector<std::string> headlessArgs = {"--headless"};
+    const std::vector<std::string> ownClientArgs = {"--client", "mine"};
+    Servitor::GlobalOptions opt;
+    opt.engine = (tmp.path / "engine").string();
+    opt.project = project.string();
+    opt.client = Servitor::DefaultClientId();   // what ParseArgs stores when --client is omitted
+    opt.clientSet = false;
+    Arcane::Remote::Envelope err;
+    auto plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, headlessArgs, &err);
+    REQUIRE(plan.has_value());
+    CHECK_FALSE(has(plan->argv, "--client"));
+    CHECK_FALSE(has(plan->argv, Servitor::DefaultClientId()));
+
+    opt.client = "grok-review-r1";
+    opt.clientSet = true;
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, headlessArgs, &err);
+    REQUIRE(plan.has_value());
+    const auto at = std::find(plan->argv.begin(), plan->argv.end(), "--client");
+    REQUIRE(at != plan->argv.end());
+    REQUIRE(at + 1 != plan->argv.end());
+    CHECK(*(at + 1) == "grok-review-r1");
+    CHECK_FALSE(has(plan->argv, Servitor::DefaultClientId()));
+
+    // A --client the operator typed after "--" is theirs: not doubled.
+    plan = Servitor::PlanLaunch(Arcane::Remote::HostKind::Runtime, opt, ownClientArgs, &err);
+    REQUIRE(plan.has_value());
+    CHECK(std::count(plan->argv.begin(), plan->argv.end(), "--client") == 1);
+    CHECK_FALSE(has(plan->argv, "grok-review-r1"));
+}
 #endif

@@ -399,6 +399,11 @@ namespace Arcane
         std::string     remoteDescriptor;
         std::uint32_t   remoteIdleExitSeconds = 600;
         bool            remoteIdleExitSupplied = false;
+        // --client <name>: the caller name HostSession records in the descriptor
+        // (servitor launch --client NAME forwards it; "" = unnamed). Like the
+        // other remote flags: DEV only, refused by a Dist Parse, stripped from
+        // a relaunch line.
+        std::string     remoteClient;
 #endif
 
         // Forward-declared here so it names HostConfig::ParseOutcome and can be the

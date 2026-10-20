@@ -270,6 +270,7 @@ bool HostSession::Start()
     desc.state = m_gate.State();
     desc.frame = m_gate.frame.load(std::memory_order_acquire);
     desc.abi = kGamePluginABIVersion; // ruling F27
+    desc.client = m_config.client;
     m_descriptor = desc;
     if (m_descriptorPath.empty() || !WriteDescriptorAtomic(m_descriptorPath, desc)) {
         ARC_ERROR("remote: could not write the descriptor {}; this host runs without remote",
@@ -520,6 +521,7 @@ void HostSession::WriteHeartbeat(std::int64_t nowUnixMs)
     // removed) comes back on the next beat instead of leaving the host
     // invisible to servitor status (final fix pass, C-M3).
     m_descriptor.heartbeatUnixMs = nowUnixMs;
+    m_descriptor.client = m_config.client;
     m_descriptor.state = m_gate.State();
     m_descriptor.frame = m_gate.frame.load(std::memory_order_acquire);
     WriteDescriptorAtomic(m_descriptorPath, m_descriptor);

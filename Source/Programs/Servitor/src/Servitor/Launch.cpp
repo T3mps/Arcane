@@ -371,12 +371,15 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
     plan.exe = *exe;
     std::vector<std::string> argv(hostArgs.begin(), hostArgs.end());
     bool hasRemote = false;
+    bool hasClient = false;
     bool headless = false;
     std::optional<std::size_t> projectAt;
     std::optional<std::size_t> descriptorAt;
     for (std::size_t i = 0; i < argv.size(); ++i) {
         if (argv[i] == "--remote") {
             hasRemote = true;
+        } else if (argv[i] == "--client") {
+            hasClient = true;
         } else if (argv[i] == "--headless") {
             headless = true;
         } else if (argv[i] == "--project" && i + 1 < argv.size()) {
@@ -426,6 +429,14 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
         argv.insert(argv.begin(), {"--project", PathUtf8(*root)});
     if (!hasRemote)
         argv.emplace_back("--remote");
+    // The operator's --client NAME reaches the host so its descriptor records it.
+    // Only an explicit one: opt.client holds DefaultClientId() otherwise, which
+    // would stamp every host with "servitor/<version> pid N". A --client after
+    // "--" is the operator's own and is left alone.
+    if (opt.clientSet && !hasClient) {
+        argv.emplace_back("--client");
+        argv.emplace_back(opt.client);
+    }
     plan.argv = std::move(argv);
     plan.hideConsole = headless || kind == Arcane::Remote::HostKind::Server;
     return plan;

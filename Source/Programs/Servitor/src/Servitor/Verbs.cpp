@@ -4,6 +4,7 @@
 
 #include <Servitor/Commands.hpp>
 #include <Servitor/Discover.hpp>
+#include <Servitor/FanOut.hpp>
 #include <Servitor/Launch.hpp>
 #include <Servitor/Transport.hpp>
 
@@ -605,7 +606,8 @@ bool EcsQueryArgs(std::span<const std::string> rest, nlohmann::json& out, std::s
     return true;
 }
 
-// quit: posts host.quit. With --force (spec s4.7) it then watches the target
+// quit: posts host.quit. With --client NAME it quits the hosts that client
+// launched instead (QuitByClient). With --force (spec s4.7) it then watches the target
 // process (pid + creation stamp from its descriptor) until --timeout, measured
 // from the start of the verb, and terminates it if it is still alive -- also
 // when the host answered host.busy{modal} (--force does not discard changes;
@@ -619,6 +621,20 @@ int QuitVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     std::string error;
     if (!QuitArgs(rest, req.args, &error))
         return PrintUsage(error, opt.format);
+    if (opt.clientSet) {
+        // --client NAME on quit selects the hosts that client launched (their
+        // descriptors record it); it is not the X-Remote-Client audit header
+        // here. QuitByClient reads those descriptors before any host scan.
+        Arcane::Remote::Envelope refusal;
+        const auto dir = RemoteDirFor(opt, &refusal);
+        if (!dir) {
+            refusal.command = "host.quit";
+            Arcane::Remote::ClientBlock client;
+            client.exitCode = Arcane::Remote::ExitFromHost(refusal);
+            return PrintEnvelope(refusal, client, opt);
+        }
+        return QuitByClient(rest, opt, *dir, nullptr, nullptr);
+    }
     const bool force = QuitForced(rest);
     const auto started = std::chrono::steady_clock::now();
     PostedCall posted = PostVerb(*FindVerb("quit"), req, opt, force);
@@ -1187,8 +1203,12 @@ bool PostsCall(const VerbRow& row)
 std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions& opt)
 {
     // --yes confirms a Drive command fanned out to several hosts (spec AM2);
-    // without --all it confirms nothing (final fix pass, C-I4).
-    if (opt.yes && !opt.all)
+    // without --all it confirms nothing (final fix pass, C-I4). One exception:
+    // `quit --client NAME` fans out to the hosts that client launched, and its
+    // --yes confirms that several-host selection (it still does not mean --all).
+    const std::string_view verbWords = row.words;
+    const bool quitByClient = verbWords == "quit" && opt.clientSet;
+    if (opt.yes && !opt.all && !quitByClient)
         return std::string("--yes applies only with --all (it confirms a Drive command sent to several hosts)");
     // Round 2 (I-1): under --all a rediscovered "replacement" could be a
     // sibling the fan-out already reached, so a resend could run twice there.
@@ -1212,8 +1232,10 @@ std::optional<std::string> UnusedGlobal(const VerbRow& row, const GlobalOptions&
     }
     if (PostsCall(row))
         return std::nullopt;
-    // Round 2 (M-1): X-Remote-Client rides a /call only.
-    if (opt.clientSet)
+    // Round 2 (M-1): X-Remote-Client rides a /call only. launch and status take
+    // --client too: launch forwards it to the host (the descriptor records it)
+    // and status lists only the hosts that client launched.
+    if (opt.clientSet && words != "launch" && words != "status")
         return "--client does not apply to " + std::string(row.words);
     if (!opt.world.empty())
         return "--world does not apply to " + std::string(row.words);

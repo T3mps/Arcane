@@ -32,6 +32,7 @@ struct Descriptor {
     std::string state;
     std::uint64_t frame = 0;
     std::uint32_t abi = 0;  // kGamePluginABIVersion of the host that wrote it (ruling F27); HostSession::Start writes it
+    std::string client;     // --client NAME the host was launched with ("" = none); HostSession writes it, a missing key reads ""
 };
 
 // <projectRoot>/Saved/Remote/<editor|runtime|server>-<pid>.json, through Paths.

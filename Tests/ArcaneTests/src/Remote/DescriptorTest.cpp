@@ -211,4 +211,28 @@ TEST_CASE("ReadDescriptor is tolerant of a newer host's descriptor", "[remote][d
     CHECK_FALSE(Arcane::Remote::ReadDescriptor(dir / "absent.json"));
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("a descriptor round-trips client, and a file without the key reads empty", "[remote][descriptor]") {
+    const auto dir = std::filesystem::temp_directory_path() / "remote-descriptor-client";
+    std::filesystem::remove_all(dir);
+    const auto path = dir / "runtime-77.json";
+    Arcane::Remote::Descriptor d;
+    d.hostKind = Arcane::Remote::HostKind::Runtime;
+    d.pid = 77;
+    d.port = 5555;
+    d.token = "t";
+    d.client = "grok-review-r1";
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(path, d));
+    auto back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK(back->client == "grok-review-r1");
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << R"({"protocol":1,"hostKind":"runtime","pid":77,"port":5555,"token":"t"})";
+    }
+    back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK(back->client.empty());
+    std::filesystem::remove_all(dir);
+}
 #endif

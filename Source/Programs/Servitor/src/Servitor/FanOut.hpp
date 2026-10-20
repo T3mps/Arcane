@@ -53,6 +53,16 @@ int RunFanOut(const VerbRow& row, std::span<const std::string> rest, const Globa
 int FanOutVerb(const VerbRow& row, std::span<const std::string> rest, const GlobalOptions& opt, const Scan& scan,
                FanOutPost post, void* user, FanOutResult* captured = nullptr);
 
+// `quit --client NAME`: quits the hosts whose descriptor `client` is NAME (the
+// ones `servitor --client NAME launch` started), read from `remoteDir` before
+// any scan. An empty client is a usage error, so is --pid. No match is
+// target.none (exit 4). More than one match without --yes is arg.inapplicable
+// (exit 2) and connects to nothing; one match, or --yes, sends host.quit to each
+// through `post` (null = the live transport). Hosts whose process already
+// exited are skipped. captured non-null: stores the result instead of printing.
+int QuitByClient(std::span<const std::string> rest, const GlobalOptions& opt, const std::filesystem::path& remoteDir,
+                 FanOutPost post, void* user, FanOutResult* captured = nullptr);
+
 } // namespace Servitor
 
 #endif

@@ -27,7 +27,7 @@ namespace Arcane::Server
                     continue;
                 arg.remove_prefix(2);
                 const std::string_view name = arg.substr(0, arg.find('='));
-                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit")
+                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit" || name == "client")
                     return true;
             }
             return false;
@@ -73,6 +73,8 @@ namespace Arcane::Server
                                             "(empty = under <project>/Saved/Remote/)");
         cli.Option("remote-idle-exit", std::to_string(ServerConfig{}.remoteIdleExitSeconds),
                    "DEV: with --remote, exit after this many seconds with no remote request (0 = never)");
+        cli.Option("client", "", "DEV: with --remote, the caller name recorded in the attach descriptor "
+                                 "(servitor launch --client NAME; empty = unnamed)");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -98,6 +100,7 @@ namespace Arcane::Server
                                  "flag is not a descriptor path)\n");
             return { std::nullopt, 2 };
         }
+        cfg.remoteClient     = r.Get("client");
         cfg.remoteIdleExitSupplied = r.Supplied("remote-idle-exit");
         if (cfg.remoteIdleExitSupplied
             && !ParseIdleExitSeconds(r.Get("remote-idle-exit"), cfg.remoteIdleExitSeconds))
@@ -140,7 +143,7 @@ namespace Arcane::Server
         // --project. A bare --remote followed by a positional would lose that
         // positional, but this CLI has no positionals (Cli refuses them).
         static constexpr std::string_view kStripWithValue[] = {
-            "frames", "report", "remote", "remote-descriptor", "remote-idle-exit",
+            "frames", "report", "remote", "remote-descriptor", "remote-idle-exit", "client",
         };
         std::string out = (exePath.find(' ') != std::string::npos || exePath.empty())
                         ? "\"" + exePath + "\""

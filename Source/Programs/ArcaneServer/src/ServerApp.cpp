@@ -199,6 +199,7 @@ namespace Arcane::Server
             rc.cvarContext        = Arcane::CVarContext::ServerAdmin;
             rc.projectRoot        = proj->Root();
             rc.descriptorOverride = m_cfg.remoteDescriptor;
+            rc.client             = m_cfg.remoteClient;
             rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
             rc.holdSim            = m_cfg.remote && m_cfg.frames == 0;   // AM1: an open-ended run waits for play
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };

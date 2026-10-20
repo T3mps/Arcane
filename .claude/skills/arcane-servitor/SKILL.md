@@ -18,7 +18,7 @@ A Servitor check is evidence for THIS change, not a regression net. If the behav
 - **Binary:** `Binaries\<Cfg>-windows-x86_64-md\Servitor\servitor.exe`. It is built with `Arcane.slnx` and compiled out of Dist (there it exits 2).
 - **Project:** `--project <dir|.arcproj>`, otherwise the nearest `.arcproj` above the working directory.
 - **Engine root:** `--engine <root>` or `SERVITOR_ENGINE` when servitor cannot find the host exes beside itself.
-- **Name yourself:** pass `--client claude-code` on calls so the host's audit log (`Saved\Remote\audit.ndjson`) names the agent.
+- **Name yourself:** pass `--client claude-code` on every call, `launch` and `status` included, so the host's audit log (`Saved\Remote\audit.ndjson`) names the agent. `launch --client NAME` records NAME in the host's descriptor; `status --client NAME` lists only that client's hosts; `quit --client NAME` quits the hosts that client launched (several need `--yes`; none is exit 4), so launch with the same `--client` you quit with.
 - **Read the output:** `--format json` (or `--json`) gives the full envelope. Branch on the exit code, never on HTTP status.
 
 How each host gets remote:
@@ -40,7 +40,7 @@ set P=--project ReferenceProject --client claude-code
 %S% %L% status
 
 :: headless runtime, deterministic picture
-%S% %L% launch runtime --headless -- --fixed-time 0
+%S% %P% launch runtime --headless -- --fixed-time 0
 %S% %P% --host runtime wait settled
 %S% %P% --host runtime screenshot window --out %TEMP%\shot.png
 %S% %P% --host runtime compare runtime-scene --source window

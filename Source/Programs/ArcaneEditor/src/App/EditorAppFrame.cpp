@@ -1990,6 +1990,7 @@ namespace Arcane::Editor
         rc.cvarContext        = Arcane::CVarContext::Editor;
         rc.projectRoot        = projectRoot;
         rc.descriptorOverride = m_config.remoteDescriptor;
+        rc.client             = m_config.remoteClient;
         // The idle exit is for an abandoned open-ended headless editor only
         // (spec s4.7); an interactive editor never ends itself.
         rc.idleExitSeconds    = (m_config.headless && m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
