@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -109,6 +110,23 @@ namespace
         return std::strtoull(header.c_str() + at + k.size(), nullptr, 16);
     }
 
+    // "key none" -> nullopt; "key <decimal>" -> that value. Read from the checked-in header so a
+    // re-blessed header cannot silently disagree with the request.
+    std::optional<float> ParseOptionalFloat(const std::string& header, const char* key)
+    {
+        const std::string k = std::string(key) + " ";
+        const auto at = header.find(k);
+        REQUIRE(at != std::string::npos);
+        const char* v = header.c_str() + at + k.size();
+        if (std::strncmp(v, "none", 4) == 0) return std::nullopt;
+        return std::strtof(v, nullptr);
+    }
+
+    std::string BodyOf(const std::string& text)
+    {
+        return text.substr(text.find('\n') + 1);
+    }
+
     Arcane::PhysicsDebugExtractRequest2D InspectorRequest(const std::string& header)
     {
         Arcane::PhysicsDebugExtractRequest2D r;
@@ -117,8 +135,8 @@ namespace
         r.inspectorFixtureA = ParseHex(header, "fixtureA");
         r.inspectorFixtureB = ParseHex(header, "fixtureB");
         r.inspectorStepIndex = -1;
-        r.inspectorThickness = std::nullopt;   // header: thickness none
-        r.inspectorEmphasis = 1.0f;            // header: emphasis 1
+        r.inspectorThickness = ParseOptionalFloat(header, "thickness");
+        r.inspectorEmphasis = ParseOptionalFloat(header, "emphasis");
         return r;
     }
 
@@ -191,6 +209,47 @@ TEST_CASE("the inspector proxy matches the v1 bytes", "[physics][proxy]")
     Arcane::Runtime rt(Arcane::Test::Process());
     StepScene(rt);
     CheckDebug("v1-inspector.txt", rt.Registry(), InspectorRequest(HeaderOf(Disk("v1-inspector.txt"))));
+}
+
+// Review fix round 1: the inspector overlay APPENDS to the ordinary primitives. v1 has no
+// snapshot with the draw on and an inspector ask together (v1-debug-* have no inspector ids,
+// v1-inspector has no ordinary draw), so the expectation is built from two existing files.
+TEST_CASE("the inspector overlay appends to the whole-world primitives", "[physics][proxy]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    StepScene(rt);
+    const std::string whole = Disk("v1-debug-wholeworld.txt");
+    const std::string insp = Disk("v1-inspector.txt");
+    REQUIRE_FALSE(whole.empty());
+    REQUIRE_FALSE(insp.empty());
+    Arcane::PhysicsDebugExtractRequest2D request = WholeWorldRequest();
+    const auto ask = InspectorRequest(HeaderOf(insp));
+    request.inspectorFixtureA = ask.inspectorFixtureA;
+    request.inspectorFixtureB = ask.inspectorFixtureB;
+    request.inspectorStepIndex = ask.inspectorStepIndex;
+    request.inspectorThickness = ask.inspectorThickness;
+    request.inspectorEmphasis = ask.inspectorEmphasis;
+    const auto geo = Arcane::FillPhysicsDebug2D(rt.Registry(), request);
+    CHECK(DumpPhysicsDebug(HeaderOf(whole), geo) == HeaderOf(whole) + "\n" + BodyOf(whole) + BodyOf(insp));
+}
+
+TEST_CASE("the inspector overlay appends to the selected-only primitives", "[physics][proxy]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    const auto scene = StepScene(rt);
+    const std::string sel = Disk("v1-debug-selected.txt");
+    const std::string insp = Disk("v1-inspector.txt");
+    REQUIRE_FALSE(sel.empty());
+    REQUIRE_FALSE(insp.empty());
+    Arcane::PhysicsDebugExtractRequest2D request = SelectedRequest(scene.Circle());
+    const auto ask = InspectorRequest(HeaderOf(insp));
+    request.inspectorFixtureA = ask.inspectorFixtureA;
+    request.inspectorFixtureB = ask.inspectorFixtureB;
+    request.inspectorStepIndex = ask.inspectorStepIndex;
+    request.inspectorThickness = ask.inspectorThickness;
+    request.inspectorEmphasis = ask.inspectorEmphasis;
+    const auto geo = Arcane::FillPhysicsDebug2D(rt.Registry(), request);
+    CHECK(DumpPhysicsDebug(HeaderOf(sel), geo) == HeaderOf(sel) + "\n" + BodyOf(sel) + BodyOf(insp));
 }
 
 TEST_CASE("a perspective view draws no physics debug", "[physics][proxy]")

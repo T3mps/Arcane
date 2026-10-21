@@ -5,7 +5,8 @@ namespace Arcane
 {
     namespace
     {
-        PhysicsDebugFillFn2D      g_debugFill2D = nullptr;
+        // Written only by image-load registrars; read-only once any thread runs Extract.
+        PhysicsDebugFillFn2D     g_debugFill2D = nullptr;
         PhysicsSilhouetteFillFn2D g_silhouetteFill2D = nullptr;
     }
 

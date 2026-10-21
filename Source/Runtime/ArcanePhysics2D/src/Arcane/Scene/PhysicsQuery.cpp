@@ -91,10 +91,14 @@ namespace Arcane
                 Phys::NarrowphaseTrace trace;
                 (void)solver->DebugCollide(UnpackFixture(*request.inspectorFixtureA),
                                            UnpackFixture(*request.inspectorFixtureB), trace);
+                // The overlay gather clears its output, so it fills a local and APPENDS
+                // after the ordinary primitives (spec 3.1).
+                PhysicsDebugGeometry overlay;
                 GatherNarrowphaseWorldOverlay(trace, request.inspectorStepIndex, *request.view,
                     request.inspectorThickness, request.inspectorEmphasis,
                     Settings<PhysicsDebugTraceSettings2D>(), Settings<PhysicsDebugColorSettings2D>(),
-                    Settings<PhysicsDebugStyleSettings2D>(), geo);
+                    Settings<PhysicsDebugStyleSettings2D>(), overlay);
+                geo.primitives.insert(geo.primitives.end(), overlay.primitives.begin(), overlay.primitives.end());
             }
             return geo;
         }
