@@ -12,6 +12,7 @@
 #include <Arcane/Config/Settings.hpp>
 #include <Arcane/Crypto/Crypto.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
+#include <Arcane/Scene/PhysicsDebugGeometry.hpp>   // GatherPhysicsDebug (Render no longer carries it)
 #include <Arcane/Render/PickEmit.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/Physics2DDetail.hpp>

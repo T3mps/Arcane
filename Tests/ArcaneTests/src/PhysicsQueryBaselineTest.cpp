@@ -8,13 +8,17 @@
 #include "Helpers/PhysicsV1Baseline.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
+#include <Arcane/Render/ExtractFrame.hpp>
+#include <Arcane/Render/RenderFramePacket.hpp>
 #include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Scene/PhysicsQuery.hpp>
+#include <Arcane/Scene/SceneResources.hpp>       // RenderContext2D
 
 #include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
@@ -239,4 +243,92 @@ TEST_CASE("PhysicsQuery.hpp names no solver type", "[physics][proxy]")
     REQUIRE_FALSE(text.empty());
     for (const char* bad : { "Manifold2D", "Manifold", "NarrowphaseTrace", "PhysicsWorld", "BodyHandle", "FixtureHandle" })
         CHECK(text.find(bad) == std::string::npos);
+}
+
+// Task 7: Extract reaches physics only through the proxy, and Render has no physics edge.
+TEST_CASE("ArcaneRender includes no physics solver header", "[physics][proxy]")
+{
+    const auto root = Arcane::Test::RepoRoot() / "Source/Client/ArcaneRender";
+    const std::vector<std::string> banned = {
+        "Physics2DDetail.hpp", "Physics2DHandles.hpp", "PhysicsSystem.hpp",
+        "PhysicsDebugGeometry.hpp", "Manifold2D/"
+    };
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
+    {
+        if (!entry.is_regular_file()) continue;
+        const auto ext = entry.path().extension();
+        if (ext != ".hpp" && ext != ".cpp" && ext != ".inl") continue;
+        const std::string text = ReadFileBinary(entry.path());
+        for (const auto& ban : banned)
+        {
+            INFO(entry.path().string() << " names " << ban);
+            CHECK(text.find(ban) == std::string::npos);
+        }
+    }
+    const std::string module = ReadFileBinary(root / "ArcaneRender.arcmodule");
+    CHECK(module.find("ArcanePhysics2D") == std::string::npos);
+    const auto sceneTypes = Arcane::Test::RepoRoot() /
+        "Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsDebugTypes.hpp";
+    const auto physicsTypes = Arcane::Test::RepoRoot() /
+        "Source/Runtime/ArcanePhysics2D/src/Arcane/Scene/PhysicsDebugTypes.hpp";
+    CHECK(std::filesystem::exists(sceneTypes));
+    CHECK_FALSE(std::filesystem::exists(physicsTypes));
+    CHECK(std::filesystem::exists(Arcane::Test::RepoRoot() /
+        "Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsDebugDrawOptions.hpp"));
+}
+
+TEST_CASE("ExtractFrame's physics overlay equals the v1 whole-world bytes", "[physics][proxy][extract]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    StepScene(rt);
+
+    // The v1 view is Affine2D{ {640, 360}, {100, -100} }. An ordinary orthographic view cannot
+    // reproduce it bit for bit at height 720 (AsAffine2D's float chain lands one ulp off 100),
+    // so this one is built from exactly representable terms: 1280x800 viewport, projection
+    // x scale 0.15625 and y scale 0.25 (100 px per metre) and y shift 0.1 (offset.y 360).
+    Arcane::RenderContext2D ctx;
+    ctx.view.viewport = { 1280u, 800u };
+    ctx.view.projection[0][0] = 0.15625f;
+    ctx.view.projection[1][1] = 0.25f;
+    ctx.view.projection[3][1] = 0.1f;
+    ctx.alpha = 0.0f;
+    rt.Registry().SetResource<Arcane::RenderContext2D>(std::move(ctx));
+
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 1280u, 800u };
+    req.physicsDebug = true;
+    req.physicsWholeWorld = true;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(rt.Registry(), req, ring);
+
+    REQUIRE(packet.spriteView.has_value());
+    const auto affine = packet.spriteView->view.AsAffine2D();
+    REQUIRE(affine.has_value());
+    REQUIRE(affine->offset == kOrdinary.offset);   // the view must BE the v1 view, or the bytes cannot match
+    REQUIRE(affine->scale == kOrdinary.scale);
+
+    const std::string disk = Disk("v1-debug-wholeworld.txt");
+    REQUIRE_FALSE(disk.empty());
+    std::string out = HeaderOf(disk); out += '\n';
+    for (const Arcane::OverlayPrimitive& p : packet.overlay.prims)
+    {
+        if (p.tag == Arcane::OverlayPrimitive::Tag::Line)
+        {
+            const auto& l = p.line;
+            CHECK(l.screenSpace);
+            CHECK(l.a.z == 0.0f);
+            out += "line " + Hex8(l.a.x) + " " + Hex8(l.a.y) + " " + Hex8(l.b.x) + " " + Hex8(l.b.y) + " "
+                 + Hex8(l.thickness) + " " + Hex8(l.color.r) + " " + Hex8(l.color.g) + " " + Hex8(l.color.b) + " "
+                 + Hex8(l.color.a) + "\n";
+        }
+        else
+        {
+            const auto& f = p.fill;
+            CHECK(f.kind == Arcane::OverlayPrimKind::Circle);
+            out += "circle " + Hex8(f.a.x) + " " + Hex8(f.a.y) + " " + Hex8(f.radius) + " "
+                 + Hex8(f.color.r) + " " + Hex8(f.color.g) + " " + Hex8(f.color.b) + " " + Hex8(f.color.a) + "\n";
+        }
+    }
+    CHECK(packet.overlay.prims.size() > 1);
+    CHECK(out == disk);
 }

@@ -12,6 +12,7 @@
 
 #include <Arcane/Render/Batcher2D.hpp>
 #include <Arcane/Render/PhysicsDebugDraw.hpp>
+#include "Helpers/PhysicsDebugDrawSolver.hpp"
 #include <Arcane/Render/RenderSystems.hpp>
 #include <Arcane/Scene/RenderViewSettings.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
