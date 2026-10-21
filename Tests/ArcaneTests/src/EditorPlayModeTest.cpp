@@ -101,6 +101,7 @@ TEST_CASE("Play snapshots and Stop restores the authored registry", "[editor]")
     CHECK(found);
 }
 
+#if !defined(ARC_BUILD_DIST)   // PlaySession::FailNextRestoreForTesting is compiled out of Dist
 TEST_CASE("a failed Stop stays in Play and a second Stop restores", "[editor][play]")
 {
     Arcane::Runtime runtime(Arcane::Test::Process());
@@ -142,6 +143,7 @@ TEST_CASE("a failed Stop stays in Play and a second Stop restores", "[editor][pl
     CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
     CHECK(sortingLayer() == 3);
 }
+#endif
 
 TEST_CASE("a failed Stop is wired through Save, Clear and the plugin Poll", "[editor][play]")
 {
