@@ -56,7 +56,7 @@ namespace Arcane
     //                             (local +x tick, so circles show rotation);
     //   PhysicsDebugColorSettings2D the palette (per body type, island, overlay
     //                             and NarrowphaseKind);
-    //   PhysicsDebugTraceSettings2D DrawNarrowphaseWorldOverlay's defaults.
+    //   PhysicsDebugTraceSettings2D GatherNarrowphaseWorldOverlay (Physics2D)'s defaults.
     // NOT inherited: PhysicsDebugStyleSettings2D (debug.physics.style.*: arrow
     // heads, sleeping dim, emphasis floor, thickness scales, px radii); both
     // overlays read its published values directly.
