@@ -310,7 +310,7 @@ TEST_CASE("ArcaneRender includes no physics solver header", "[physics][proxy]")
     const auto root = Arcane::Test::RepoRoot() / "Source/Client/ArcaneRender";
     const std::vector<std::string> banned = {
         "Physics2DDetail.hpp", "Physics2DHandles.hpp", "PhysicsSystem.hpp",
-        "PhysicsDebugGeometry.hpp", "Manifold2D/"
+        "PhysicsDebugGeometry.hpp", "Manifold2D/", "Physics2DWorld.hpp", "ArcanePhysics2DApi.hpp"
     };
     for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
     {
@@ -336,6 +336,35 @@ TEST_CASE("ArcaneRender includes no physics solver header", "[physics][proxy]")
         "Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsDebugDrawOptions.hpp"));
 }
 
+namespace
+{
+    // The overlay's Line / Circle primitives in the Task 2 line format under the given header.
+    std::string DumpOverlay(const std::string& header, const Arcane::RenderFramePacket& packet)
+    {
+        std::string out = header; out += '\n';
+        for (const Arcane::OverlayPrimitive& p : packet.overlay.prims)
+        {
+            if (p.tag == Arcane::OverlayPrimitive::Tag::Line)
+            {
+                const auto& l = p.line;
+                CHECK(l.screenSpace);
+                CHECK(l.a.z == 0.0f);
+                out += "line " + Hex8(l.a.x) + " " + Hex8(l.a.y) + " " + Hex8(l.b.x) + " " + Hex8(l.b.y) + " "
+                     + Hex8(l.thickness) + " " + Hex8(l.color.r) + " " + Hex8(l.color.g) + " " + Hex8(l.color.b) + " "
+                     + Hex8(l.color.a) + "\n";
+            }
+            else
+            {
+                const auto& f = p.fill;
+                CHECK(f.kind == Arcane::OverlayPrimKind::Circle);
+                out += "circle " + Hex8(f.a.x) + " " + Hex8(f.a.y) + " " + Hex8(f.radius) + " "
+                     + Hex8(f.color.r) + " " + Hex8(f.color.g) + " " + Hex8(f.color.b) + " " + Hex8(f.color.a) + "\n";
+            }
+        }
+        return out;
+    }
+}
+
 TEST_CASE("ExtractFrame's physics overlay equals the v1 whole-world bytes", "[physics][proxy][extract]")
 {
     Arcane::Runtime rt(Arcane::Test::Process());
@@ -343,7 +372,7 @@ TEST_CASE("ExtractFrame's physics overlay equals the v1 whole-world bytes", "[ph
 
     // The v1 view is Affine2D{ {640, 360}, {100, -100} }. An ordinary orthographic view cannot
     // reproduce it bit for bit at height 720 (AsAffine2D's float chain lands one ulp off 100),
-    // so this one is built from exactly representable terms: 1280x800 viewport, projection
+    // so this one is built from terms whose float chain lands exactly on the v1 affine (REQUIREd below): 1280x800 viewport, projection
     // x scale 0.15625 and y scale 0.25 (100 px per metre) and y shift 0.1 (offset.y 360).
     Arcane::RenderContext2D ctx;
     ctx.view.viewport = { 1280u, 800u };
@@ -368,26 +397,41 @@ TEST_CASE("ExtractFrame's physics overlay equals the v1 whole-world bytes", "[ph
 
     const std::string disk = Disk("v1-debug-wholeworld.txt");
     REQUIRE_FALSE(disk.empty());
-    std::string out = HeaderOf(disk); out += '\n';
-    for (const Arcane::OverlayPrimitive& p : packet.overlay.prims)
-    {
-        if (p.tag == Arcane::OverlayPrimitive::Tag::Line)
-        {
-            const auto& l = p.line;
-            CHECK(l.screenSpace);
-            CHECK(l.a.z == 0.0f);
-            out += "line " + Hex8(l.a.x) + " " + Hex8(l.a.y) + " " + Hex8(l.b.x) + " " + Hex8(l.b.y) + " "
-                 + Hex8(l.thickness) + " " + Hex8(l.color.r) + " " + Hex8(l.color.g) + " " + Hex8(l.color.b) + " "
-                 + Hex8(l.color.a) + "\n";
-        }
-        else
-        {
-            const auto& f = p.fill;
-            CHECK(f.kind == Arcane::OverlayPrimKind::Circle);
-            out += "circle " + Hex8(f.a.x) + " " + Hex8(f.a.y) + " " + Hex8(f.radius) + " "
-                 + Hex8(f.color.r) + " " + Hex8(f.color.g) + " " + Hex8(f.color.b) + " " + Hex8(f.color.a) + "\n";
-        }
-    }
+    const std::string out = DumpOverlay(HeaderOf(disk), packet);
     CHECK(packet.overlay.prims.size() > 1);
     CHECK(out == disk);
+}
+
+// The alpha pass-through: the alt view needs ExtractFrame to forward RenderContext2D::alpha
+// (0.25) to the proxy request, or the bodies draw at their step positions and the bytes differ.
+TEST_CASE("ExtractFrame's physics overlay equals the v1 alt-view bytes", "[physics][proxy][extract]")
+{
+    Arcane::Runtime rt(Arcane::Test::Process());
+    StepScene(rt, 20);
+
+    // 200x160 viewport, projection scale 0.5: scale {50, -40}, offset {100, 80}, every term exact.
+    Arcane::RenderContext2D ctx;
+    ctx.view.viewport = { 200u, 160u };
+    ctx.view.projection[0][0] = 0.5f;
+    ctx.view.projection[1][1] = 0.5f;
+    ctx.alpha = 0.25f;
+    rt.Registry().SetResource<Arcane::RenderContext2D>(std::move(ctx));
+
+    Arcane::PacketRing ring;
+    Arcane::ExtractRequest req;
+    req.viewport = { 200u, 160u };
+    req.physicsDebug = true;
+    req.physicsWholeWorld = true;
+    const Arcane::RenderFramePacket& packet = Arcane::ExtractFrame(rt.Registry(), req, ring);
+
+    REQUIRE(packet.spriteView.has_value());
+    const auto affine = packet.spriteView->view.AsAffine2D();
+    REQUIRE(affine.has_value());
+    REQUIRE(affine->offset == kAlt.offset);
+    REQUIRE(affine->scale == kAlt.scale);
+
+    const std::string disk = Disk("v1-debug-altview.txt");
+    REQUIRE_FALSE(disk.empty());
+    CHECK(packet.overlay.prims.size() > 1);
+    CHECK(DumpOverlay(HeaderOf(disk), packet) == disk);
 }
