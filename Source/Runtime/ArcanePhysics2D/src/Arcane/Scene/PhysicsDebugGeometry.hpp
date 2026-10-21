@@ -2,6 +2,7 @@
 #include <Arcane/Modules/ArcanePhysics2DApi.hpp>
 #include <Arcane/Core/Api.hpp>
 #include <Arcane/Scene/PhysicsDebugTypes.hpp>
+#include <Arcane/Scene/PhysicsQuery.hpp>   // PhysicsDebugPrimitive + PhysicsDebugGeometry live there
 #include <Arcane/Scene/ViewTransform.hpp>
 #include <cstdint>
 #include <glm/vec2.hpp>
@@ -74,24 +75,6 @@ namespace Arcane
         std::optional<std::uint64_t> onlyBody;
     };
 
-
-    struct PhysicsDebugPrimitive
-    {
-        enum class Kind { Line, Circle } kind;
-        glm::vec2 a{}, b{};
-        float size = 0.0f;
-        glm::vec4 color{};
-    };
-
-    class PhysicsDebugGeometry
-    {
-    public:
-        void Line(glm::vec2 a, glm::vec2 b, float thickness, glm::vec4 color)
-        { primitives.push_back({PhysicsDebugPrimitive::Kind::Line, a, b, thickness, color}); }
-        void Circle(glm::vec2 center, float radius, glm::vec4 color)
-        { primitives.push_back({PhysicsDebugPrimitive::Kind::Circle, center, {}, radius, color}); }
-        std::vector<PhysicsDebugPrimitive> primitives;
-    };
 
     ARC_PHYSICS2D_API PhysicsDebugGeometry GatherPhysicsDebug(
         const Manifold2D::Physics::PhysicsWorld& world,
