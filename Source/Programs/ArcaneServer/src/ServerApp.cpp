@@ -7,6 +7,7 @@
 #include <Arcane/Plugin/SystemFactory.hpp>       // NetMode / Arcane::ToString(NetMode)
 #include <Arcane/Project/Project.hpp>
 #include <Arcane/Project/ProjectHost.hpp>        // VerifySharedTypeContext / GameModule / PluginModules / BootScene
+#include <Arcane/Scene/Physics2DWorld.hpp>        // Arcane::PhysicsWorld2D (systems.hasPhysicsWorld: ArcanePhysics2D is linked, not reached through Engine)
 #include <Arcane/Scene/PhysicsSystem2D.hpp>        // Arcane::PhysicsSystem2D (systems.hasPhysics)
 #include <Arcane/Scene/TransformSystems.hpp>     // Arcane::TransformPropagationSystem (systems.hasPropagation)
 
@@ -345,6 +346,9 @@ namespace Arcane::Server
         rep.update      = m_runtime->Schedulers().update.Size();
         rep.render      = m_runtime->Schedulers().render.Size();
         rep.hasPhysics     = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::PhysicsSystem2D>();
+        // The world EnsurePhysics (the tick above) minted: a null resource means no 2D
+        // hook ran, which hasPhysics alone (a scheduler entry) cannot tell apart.
+        rep.hasPhysicsWorld = m_runtime->Registry().GetResource<Arcane::PhysicsWorld2D>() != nullptr;
         rep.hasPropagation = m_runtime->Schedulers().fixedUpdate.HasSystem<Arcane::TransformPropagationSystem>();
         rep.hasRenderSubmission = false;   // by construction: no ClientRuntime exists in this process
         rep.extractFrameCalls   = Arcane::ExtractFrameCallCount();

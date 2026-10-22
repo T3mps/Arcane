@@ -1,5 +1,5 @@
 #pragma once
-#include <Arcane/Modules/ArcanePhysics2DApi.hpp>
+#include <Arcane/Scene/PhysicsSystem2DApi.hpp>
 
 // PhysicsSystem2D's declaration. The pass body is PhysicsSystem.cpp, one
 // translation unit, exported from ArcanePhysics2D. Physics2DWorld.hpp
@@ -22,7 +22,7 @@ namespace Arcane
         explicit PhysicsSystem2D(float fixedDt, bool stepWorld = true) noexcept
             : m_fixedDt(fixedDt), m_stepWorld(stepWorld) {}
 
-        ARC_PHYSICS2D_API void operator()(Arcane::Registry& reg);
+        ARC_PHYSICS_SYSTEM2D_API void operator()(Arcane::Registry& reg);
 
     private:
         friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)

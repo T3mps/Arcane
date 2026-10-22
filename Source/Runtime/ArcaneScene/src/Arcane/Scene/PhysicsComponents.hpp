@@ -8,6 +8,7 @@
 #include <Arcane/Ecs.hpp>
 #include <Arcane/Reflection.hpp>
 #include <Arcane/Scene/PhysicsBodyRef2DDisk.hpp>
+#include <Arcane/Scene/TypeList.hpp>
 
 #include <Astra/Serialization/BinaryArchive.hpp>
 #include <Astra/Serialization/BinaryReader.hpp>
@@ -152,6 +153,10 @@ namespace Arcane
             ARC_REFLECT_ATTR(Serializable, false)
             ARC_REFLECT_ATTR(Hidden)
     ARC_END_REFLECT_TYPE()
+
+    // EXACTLY the order RegisterPhysicsComponents2D registers in. Appended after the
+    // scene roster (EngineRoster.hpp); ProjectHost's VerifySharedTypeContext walks both.
+    using PhysicsComponentRoster2D = TypeList<RigidBody2D, Collider2D, PhysicsBodyRef2D>;
 
     inline void RegisterPhysicsComponents2D(Arcane::ComponentRegistry& creg)
     {

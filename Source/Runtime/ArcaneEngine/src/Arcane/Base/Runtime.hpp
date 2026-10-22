@@ -391,6 +391,8 @@ namespace Arcane
         // Arcane::PhysicsWorld2D destroys the PhysicsWorld, and ArcaneEditor.exe does
         // not link Manifold2D. Nothing to do when no world exists yet.
         void      ResetPhysics();
+        // Resolved by Arcane::ResolveGravity2D (Scene/PhysicsGravity2D.hpp), the one function
+        // the 2D physics hook's EnsureWorld reads too; Engine passes no gravity to a hook.
         // The scene-root Arcane::PhysicsSettings2D component when present, else the
         // `physics.gravity` setting (its project rung, else
         // its default (0, -9.81; +Y up, F4)). Layered on purpose: gravity is

@@ -1140,7 +1140,7 @@ project "ArcaneServer"
     -- loader must resolve every module DLL a game module imports to MAP it at all.
     -- The stage list names ArcaneRemote too: the game set's closure does not hold
     -- it (or ArcaneRemoteProtocol), and the exe imports it.
-    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote" }, { stage = table.join(ARC_GAME_DEFAULT_MODULES, { "ArcaneRemote" }) })
+    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote", "ArcanePhysics2D" }, { stage = table.join(ARC_GAME_DEFAULT_MODULES, { "ArcaneRemote" }) })
     location "Source/Programs/ArcaneServer"
     kind "ConsoleApp"
     language "C++"
@@ -1156,14 +1156,12 @@ project "ArcaneServer"
         "%{IncludeDir.glm}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
-        -- Mosaic/Manifold2D: HEADERS ONLY, same reasoning as ArcaneRuntime's own
-        -- NRI comment -- Arcane/Scene/PhysicsSystem.hpp (Core, header-only)
-        -- includes Manifold2D/Physics/*.hpp for its PhysicsSystem/PhysicsResource
-        -- types, and Astra's own headers reach Mosaic's IWorkScheduler alias. This
-        -- exe does not link either: every Manifold2D/Mosaic OBJECT it can reach
-        -- (the PhysicsWorld a project's scene mints, the JobSystem's scheduler) is
-        -- created and destroyed inside ArcaneCore.dll.
-        "%{IncludeDir.Manifold2D}",
+        -- Mosaic: HEADERS ONLY -- Astra's own headers reach Mosaic's IWorkScheduler
+        -- alias. This exe does not link it: every Mosaic OBJECT it can reach (the
+        -- JobSystem's scheduler) is created and destroyed inside ArcaneCore.dll.
+        -- No Manifold2D include dir since 3D-readiness Task 8: the 2D solver is
+        -- ArcanePhysics2D's (named in the consumer list above), and a stray
+        -- Manifold2D include in this exe now fails the compile.
         "%{IncludeDir.Mosaic}",
     }
     -- Links the Engine/Net/Crypto closure ONLY (P10: never a Client module). R30's
@@ -1223,7 +1221,7 @@ project "ArcaneRuntime"
     -- module .so listed before the archive that references it is dropped.
     links { "ArcaneRuntimeHost" }
     includedirs { "%{wks.location}/Source/Programs/ArcaneRuntimeHost/src" }
-    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote" })
+    arc_module_consumer(engine_modules, { "ArcaneVerify", "ArcaneImGui", "ArcaneNet", "ArcaneCrypto", "ArcaneRemote", "ArcanePhysics2D" })
     location "Source/Programs/ArcaneRuntime"
     kind "ConsoleApp"
     language "C++"
@@ -1240,14 +1238,9 @@ project "ArcaneRuntime"
         "%{IncludeDir.imgui}",
         "%{IncludeDir.Astra}",
         "%{IncludeDir.enkiTS}",
-        -- Manifold2D: HEADERS ONLY, exactly as ArcaneServer takes it (see that
-        -- project's matching comment). Since 2026-09-16 RuntimeApp.cpp makes its
-        -- OWN VerifySharedTypeContext call, which expands the engine roster --
-        -- and the roster's physics third (RigidBody2D/Collider2D/PhysicsBodyRef,
-        -- Core's Scene/PhysicsComponents.hpp) is Manifold2D-typed. This exe does
-        -- not link Manifold2D: every object it can reach is created and
-        -- destroyed inside ArcaneCore.dll.
-        "%{IncludeDir.Manifold2D}",
+        -- No Manifold2D include dir (3D-readiness Task 8): the roster's physics third
+        -- (Scene's PhysicsComponents.hpp) is solver-free since the handle became a
+        -- uint64, and the solver is ArcanePhysics2D's, named in the consumer list.
         "%{IncludeDir.Mosaic}",
         -- NRI Phase 2, Task 7: RuntimeApp holds an Arcane::NriGraphContext (the
         -- --nri-graph vehicle), and that header is NRI-typed because the node
@@ -2410,7 +2403,9 @@ abi_digest_fixture("AbiDigestNoExport", { "_CRT_SECURE_NO_WARNINGS" })
 
 group "Tests/Fixtures"
 project "AbiDigestChild"
-    arc_module_consumer(engine_modules, { "ArcaneEngine" })
+    -- Linked, not left to the fixture DLLs: a module that is only loaded through a plugin
+    -- unloads with it, and its SimHook would dangle in ArcaneCore.
+    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcanePhysics2D" })
     location "Tests/Fixtures/AbiDigestChild"
     kind "ConsoleApp"
     language "C++"
