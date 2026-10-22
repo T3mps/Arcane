@@ -9,6 +9,7 @@
 // #defines ERROR via wingdi.h.
 #include <NRI.h>
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/IO/ReadRegularFile.hpp>
 #include <Extensions/NRISwapChain.h>
 
 #include "NriGraphContext.hpp"
@@ -647,16 +648,15 @@ namespace Arcane
             return std::span<const std::uint8_t>(cached->second);
 
         const std::filesystem::path path = m_shaderDir / (std::string(name) + ".bin");
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file)
+        const auto raw = Arcane::ReadRegularFile(path);
+        if (!raw)
         {
             ARC_ERROR("[nri-graph] shader artifact missing/unreadable: {}", path.string());
             return {};
         }
-        const std::streamsize size = file.tellg();
-        file.seekg(0, std::ios::beg);
-        std::vector<std::uint8_t> bytes(size > 0 ? (std::size_t)size : 0);
-        if (bytes.empty() || !file.read(reinterpret_cast<char*>(bytes.data()), size))
+        const auto* first = reinterpret_cast<const std::uint8_t*>(raw->data());
+        std::vector<std::uint8_t> bytes(first, first + raw->size());
+        if (bytes.empty())
         {
             ARC_ERROR("[nri-graph] shader artifact could not be read: {}", path.string());
             return {};

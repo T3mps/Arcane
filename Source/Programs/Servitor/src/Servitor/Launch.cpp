@@ -371,12 +371,29 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
     plan.exe = *exe;
     std::vector<std::string> argv(hostArgs.begin(), hostArgs.end());
     bool hasRemote = false;
+    bool hasClient = false;
     bool headless = false;
     std::optional<std::size_t> projectAt;
     std::optional<std::size_t> descriptorAt;
     for (std::size_t i = 0; i < argv.size(); ++i) {
         if (argv[i] == "--remote") {
             hasRemote = true;
+        } else if (argv[i] == "--client" || argv[i].starts_with("--client=")) {
+            hasClient = true;
+            // M1 (B7 fix round 1): a host --client that differs from servitor's
+            // own would hide the host from a later `quit --client <servitor's>`.
+            // Cli takes --client=NAME too (final fix pass, b7 m4).
+            const bool joined = argv[i] != "--client";
+            const bool same = joined ? argv[i].substr(std::string_view("--client=").size()) == opt.client
+                                     : i + 1 < argv.size() && argv[i + 1] == opt.client;
+            if (opt.clientSet && !same) {
+                if (error != nullptr)
+                    *error = Arcane::Remote::MakeError("", "arg.invalid",
+                                                       "--client is given both to servitor (" + opt.client +
+                                                           ") and after -- with another value",
+                                                       "pass --client once, before the verb");
+                return std::nullopt;
+            }
         } else if (argv[i] == "--headless") {
             headless = true;
         } else if (argv[i] == "--project" && i + 1 < argv.size()) {
@@ -426,6 +443,14 @@ std::optional<LaunchPlan> PlanLaunch(Arcane::Remote::HostKind kind, const Global
         argv.insert(argv.begin(), {"--project", PathUtf8(*root)});
     if (!hasRemote)
         argv.emplace_back("--remote");
+    // The operator's --client NAME reaches the host so its descriptor records it.
+    // Only an explicit one: opt.client holds DefaultClientId() otherwise, which
+    // would stamp every host with "servitor/<version> pid N". A --client after
+    // "--" is the operator's own and is left alone.
+    if (opt.clientSet && !hasClient) {
+        argv.emplace_back("--client");
+        argv.emplace_back(opt.client);
+    }
     plan.argv = std::move(argv);
     plan.hideConsole = headless || kind == Arcane::Remote::HostKind::Server;
     return plan;
@@ -597,7 +622,7 @@ int LaunchVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     nlohmann::json args;
     std::string error;
     if (!LaunchArgs(rest, args, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     Arcane::Remote::HostKind kind{};
     ParseKind(args["kind"].get<std::string>(), kind);
     std::vector<std::string> hostArgs;

@@ -198,7 +198,7 @@ namespace Arcane
 
     struct Runtime::Impl
     {
-        JobSystem                                   jobs;
+        std::shared_ptr<JobSystem>                  jobs;    // the ProcessContext's one pool; the last Runtime's drop runs ~JobSystem
         std::shared_ptr<Mosaic::IWorkScheduler>     sched;
         Astra::TypeContext*                         context = nullptr;   // the ProcessContext's -- Runtime owns nothing
         std::shared_ptr<Astra::ComponentRegistry>   components;
@@ -237,7 +237,7 @@ namespace Arcane
         // ComponentRegistry (spec s4; Runtime.hpp's three-argument ctor explains
         // why a per-world registry would break every module-defined type).
         Impl(ProcessContext& proc, NetMode netMode, std::shared_ptr<Astra::ComponentRegistry> sharedComponents)
-            : jobs(ApplyEngineRungAndResolveWorkers()), sched(jobs.WorkScheduler()), process(&proc), mode(netMode)
+            : jobs(proc.AcquireJobSystem(ApplyEngineRungAndResolveWorkers())), sched(jobs->WorkScheduler()), process(&proc), mode(netMode)
         {
             context = &proc.TypeContext();
 
@@ -457,8 +457,8 @@ namespace Arcane
 
     Astra::TypeContext*    Runtime::TypeContext()   noexcept { return m_impl->context; }
     Mosaic::IWorkScheduler* Runtime::WorkScheduler() noexcept { return m_impl->sched.get(); }
-    ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs.TaskExecutor(); }
-    JobSystem&             Runtime::Jobs()          noexcept { return m_impl->jobs; }
+    ITaskExecutor*         Runtime::TaskExecutor()  noexcept { return m_impl->jobs->TaskExecutor(); }
+    JobSystem&             Runtime::Jobs()          noexcept { return *m_impl->jobs; }
     std::shared_ptr<Astra::ComponentRegistry> Runtime::Components() noexcept { return m_impl->components; }
     Assets& Runtime::AssetsFacade() noexcept { return *m_impl->assets; }
     // The presentation surface -- AudioSystem/SetInputSnapshot/Input/SetImGui/

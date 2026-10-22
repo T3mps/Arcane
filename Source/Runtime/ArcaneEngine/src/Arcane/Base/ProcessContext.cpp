@@ -1,6 +1,7 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Core/ModuleAttach.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Jobs/JobSystem.hpp>
 #include <Arcane/Scene/EngineResourceTypes.hpp>   // PrewarmEngineResourceTypes (Base including Scene is within one DLL)
 #include <Astra/Core/TypeContext.hpp>
 #include <atomic>
@@ -36,6 +37,18 @@ namespace Arcane
     }
 
     ProcessContext* ProcessContext::Current() noexcept { return g_current.load(); }
+
+    std::shared_ptr<JobSystem> ProcessContext::AcquireJobSystem(std::uint32_t workerCount)
+    {
+        // One lock across lock() -> make_shared -> weak store: two overlapping
+        // Runtime constructors cannot each see an expired weak and each mint.
+        std::lock_guard<std::mutex> guard(m_jobsMutex);
+        if (auto live = m_jobs.lock())
+            return live;
+        auto made = std::make_shared<JobSystem>(workerCount);
+        m_jobs = made;
+        return made;
+    }
 
     ProcessContext::~ProcessContext()
     {

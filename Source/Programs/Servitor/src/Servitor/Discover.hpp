@@ -56,6 +56,15 @@ Scan ScanProject(const std::filesystem::path& projectRoot);
 // is deleted and listed in removedStale; a hung one (IsHung) stays, hung = true.
 // A missing directory is an empty scan.
 Scan ScanDirectory(const std::filesystem::path& remoteDir);
+// The descriptors under `dir` whose `client` equals `client`, in file-name
+// order. An empty `client` matches nothing (a descriptor with no client is
+// never a match). Reads only: it does not delete stale files, so a host that
+// already exited is still returned (callers drop it with IsStale).
+std::vector<Arcane::Remote::Descriptor> DescriptorsForClient(const std::filesystem::path& dir, const std::string& client);
+// The same selection with each descriptor's file path (a LiveHost; `hung` is
+// set from the scan clock, `live` is not implied).
+std::vector<LiveHost> HostsForClient(const std::filesystem::path& dir, const std::string& client);
+
 // The project root `opt` names: --project as an .arcproj file's folder, or as
 // a directory resolved up to its nearest .arcproj; with no --project, the
 // nearest ancestor of the working directory holding an .arcproj. An engaged

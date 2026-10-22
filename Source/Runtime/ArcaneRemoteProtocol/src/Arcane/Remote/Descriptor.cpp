@@ -53,6 +53,9 @@ std::string ToText(const Descriptor& d)
         { "state", d.state },
         { "frame", d.frame },
         { "abi", d.abi },
+        { "client", d.client },
+        { "ownerPid", d.ownerPid },
+        { "explicitRemote", d.explicitRemote },
     };
     // replace, not throw: a project path is never worth an exception here.
     return j.dump(2, ' ', false, Json::error_handler_t::replace);
@@ -83,6 +86,14 @@ bool ReadString(const Json& j, const char* key, std::string& out)
     const auto it = j.find(key);
     if (it == j.end() || !it->is_string()) return false;
     out = it->get<std::string>();
+    return true;
+}
+
+bool ReadBool(const Json& j, const char* key, bool& out)
+{
+    const auto it = j.find(key);
+    if (it == j.end() || !it->is_boolean()) return false;
+    out = it->get<bool>();
     return true;
 }
 
@@ -269,6 +280,9 @@ std::optional<Descriptor> ReadDescriptor(const std::filesystem::path& path)
     ReadString(j, "state", d.state);
     ReadUnsigned(j, "frame", d.frame);
     ReadUnsigned(j, "abi", d.abi);
+    ReadString(j, "client", d.client);
+    ReadUnsigned(j, "ownerPid", d.ownerPid);
+    ReadBool(j, "explicitRemote", d.explicitRemote);
     return d;
 }
 

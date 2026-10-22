@@ -73,6 +73,14 @@ struct ARC_REMOTE_API Arming {
     // --remote at startup) or RefuseLog (anything later, or the cvar alone).
     enum class Verdict : std::uint8_t { Arm, RefuseExit, RefuseLog };
     static Verdict Attempt(bool& attemptedBefore, NetMode mode, bool explicitRemote);
+    // B7 fix round 1 (C2): the idle exit and the --owner-pid watch belong to
+    // a host a client started for itself: an explicit --remote (servitor
+    // launch always passes it) on an open-ended run (frameBound 0, no
+    // --frames N). Anything else gets 0 for both. That includes the editor a
+    // user opens by hand, armed by editor.remote.enable alone (default on): it
+    // never ends itself and watches no process.
+    static std::uint32_t IdleExitSeconds(bool explicitRemote, std::uint64_t frameBound, std::uint32_t configured);
+    static std::uint32_t OwnerPid(bool explicitRemote, std::uint32_t configured);
 };
 
 class ARC_REMOTE_API HostSession {
@@ -82,7 +90,9 @@ public:
         CVarContext cvarContext;
         std::filesystem::path projectRoot;
         std::filesystem::path descriptorOverride;
-        std::uint32_t idleExitSeconds = 600;
+        // 0 = never. Every host sets it through Arming::IdleExitSeconds; a
+        // Config site that skips Arming never idles out (final fix pass, b7 m5).
+        std::uint32_t idleExitSeconds = 0;
         bool readOnly = false;
         bool holdSim = false;          // Task 12: --remote && maxFrames == 0; Start leaves Tick() Idle
         std::vector<std::string> capabilities;
@@ -149,6 +159,20 @@ public:
         // have neither; their play axis is their tick gate (Tick()).
         bool (*modal)(void*) = nullptr;
         bool (*building)(void*) = nullptr;
+        // --client <name> (servitor launch --client NAME): the caller name Start
+        // writes into the descriptor and every heartbeat rewrites. Empty = unnamed.
+        std::string client;
+        // --owner-pid <pid>: opt-in. Non-zero and no longer a live process
+        // (Platform::IsProcessLive(pid, 0)) -> DrainFrame takes the same exit
+        // as an expired idle timer ("remote-idle"). 0 watches nothing. Start
+        // writes it into the descriptor and every heartbeat rewrites it.
+        std::uint32_t ownerPid = 0;
+        // Final fix pass (I1): the host was armed by an explicit --remote
+        // (servitor launch always passes it), not by editor.remote.enable
+        // alone. Start writes it into the descriptor (explicitRemote) and
+        // every heartbeat keeps it; quit --client's untagged --host fallback
+        // takes only a host that has it, so never the user's own editor.
+        bool explicitRemote = false;
     };
     explicit HostSession(Config config);
     ~HostSession(); // Stop("destroyed") when still started
@@ -211,6 +235,7 @@ public:
     // idleExitSeconds > 0 and the last completed command (or Start, if none) is
     // older than that. 0 never expires. False before Start.
     bool IdleExpired() const;
+    bool OwnerGone() const;   // ownerPid is set and that process is no longer live
     // Main thread, once per loop iteration, from the predicate the host's own
     // pump uses to skip a frame (the editor's IsMinimized()): publishes it as
     // the gate's `minimized`, so Drain refuses needsFrame commands with

@@ -9,6 +9,8 @@
 #include <string>
 #include <system_error>
 #include <Arcane/Core/Constant.hpp>
+#include <Arcane/IO/PathConfine.hpp>
+#include <Arcane/IO/ReadRegularFile.hpp>
 
 namespace Arcane
 {
@@ -225,31 +227,10 @@ namespace Arcane
         {
             // Fuzz finding (fuzz/regressions/artifact/gltf-empty-uri-opens-directory,
             // 2026-10-07): a .gltf buffer with "uri": "" (or ".", "..", any directory)
-            // resolves to the source's own DIRECTORY. libstdc++ opens a directory as
-            // an ifstream, tellg() then reports LLONG_MAX, and the vector below threw
-            // std::length_error/bad_alloc out of this exception-free path -- a
-            // terminate in the editor/runtime from a one-line asset. Only a regular
-            // file is read; an allocation that still fails is a refusal, not a throw.
-            std::error_code ec;
-            if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
-
-            std::ifstream ifs(path, std::ios::binary);
-            if (!ifs) return std::nullopt;
-
-            ifs.seekg(0, std::ios::end);
-            const std::streamoff len = ifs.tellg();
-            if (len < 0) return std::nullopt;
-            ifs.seekg(0, std::ios::beg);
-
-            std::vector<std::byte> raw;
-            try { raw.resize(static_cast<std::size_t>(len)); }
-            catch (const std::exception&) { return std::nullopt; }   // bad_alloc / length_error
-            if (!raw.empty())
-            {
-                ifs.read(reinterpret_cast<char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
-                if (!ifs) return std::nullopt;
-            }
-            return raw;
+            // resolves to the source's own DIRECTORY, and a tellg-sized read of it threw
+            // out of this exception-free path. ReadRegularFile reads only a regular file
+            // under a size cap and refuses everything else with nullopt.
+            return Arcane::ReadRegularFile(path);
         }
 
         // REVIEW FIX (post-Task-7): the fixed header ParseHeader actually reads is exactly
@@ -273,6 +254,9 @@ namespace Arcane
         [[nodiscard]] std::optional<std::vector<std::byte>> ReadFilePrefix(
             const std::filesystem::path& path, std::size_t maxBytes)
         {
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec) || ec) return std::nullopt;
+
             std::ifstream ifs(path, std::ios::binary);
             if (!ifs) return std::nullopt;
 
@@ -591,6 +575,7 @@ namespace Arcane
                     {
                         std::uint32_t idx = 0;
                         if (!ir.U32(idx)) return std::nullopt;
+                        if (idx >= out.header.vertexCount) return std::nullopt;   // would read past the vertex buffer
                         out.indices.push_back(idx);
                     }
                     break;
@@ -1023,8 +1008,15 @@ namespace Arcane
             // uri carrying a reserved character (space -> "%20", ...) is not a valid
             // filename component as-is. See DecodeUriPercentEscapes's own comment for why
             // this step is required to agree with the pipeline's cgltf_decode_uri call.
-            std::optional<std::vector<std::byte>> bytes =
-                ReadWholeFile(baseDir / DecodeUriPercentEscapes(uri));
+            // An absolute decoded uri is refused before the join (operator/ would replace
+            // baseDir), and the joined path must stay strictly inside the asset directory.
+            const std::filesystem::path decoded = DecodeUriPercentEscapes(uri);
+            if (decoded.is_absolute())
+                return std::nullopt;
+            const std::filesystem::path bufferPath = baseDir / decoded;
+            if (!PathIsInsideDirectory(baseDir, bufferPath))
+                return std::nullopt;
+            std::optional<std::vector<std::byte>> bytes = ReadWholeFile(bufferPath);
             if (!bytes)
                 return std::nullopt;   // referenced buffer unreadable
             buffers.push_back(std::move(*bytes));

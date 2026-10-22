@@ -3,6 +3,12 @@
 #include <Arcane/Remote/Descriptor.hpp>
 #include <Arcane/Remote/Registry.hpp>
 #include <Arcane/Core/AbiVersion.hpp>
+#include <Arcane/Host/HostConfig.hpp>
+#include <Arcane/Platform/Process.hpp>
+#include "ServerConfig.hpp"
+#include "../Helpers/ConstantScan.hpp"   // Arcane::Test::RepoRoot (the source pins)
+#include <sstream>
+#include <regex>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -464,4 +470,272 @@ TEST_CASE("the editor's arm attempts: only the first is the startup arm, armed o
     CHECK(Arming::Attempt(cvarOnly, Arcane::NetMode::Client, false) == Verdict::RefuseLog);
 }
 
+TEST_CASE("HostSession records its client in the descriptor at Start and on every rewrite", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    for (const std::string client : {std::string{}, std::string{"grok-review-r1"}}) {
+        INFO("client '" << client << "'");
+        Arcane::Test::TempDir tmp("remote-session-client");
+        auto cfg = ServerConfig(tmp.path);
+        cfg.client = client;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->client == client);
+        CHECK_FALSE(session.DrainFrame(1));
+        // The heartbeat rewrites the whole descriptor: remove it and force a rewrite.
+        std::error_code ec;
+        std::filesystem::remove(session.DescriptorFile(), ec);
+        session.MarkStopping();   // WriteHeartbeat, at once
+        desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->client == client);
+        session.Stop("test");
+    }
+}
+
+// Final fix pass (I1): the descriptor says whether an explicit --remote armed
+// the host, at Start and on every rewrite, and every host copies its own flag
+// (the editor's m_config.remote, never editor.remote.enable). A descriptor
+// without the key (an older host) reads false.
+TEST_CASE("HostSession records the explicit --remote mark in the descriptor", "[remote][host]") {
+    RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+    for (const bool marked : {false, true}) {
+        INFO("explicitRemote " << marked);
+        Arcane::Test::TempDir tmp("remote-session-explicit");
+        auto cfg = ServerConfig(tmp.path);
+        cfg.explicitRemote = marked;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->explicitRemote == marked);
+        std::error_code ec;
+        std::filesystem::remove(session.DescriptorFile(), ec);
+        session.MarkStopping();   // WriteHeartbeat, at once
+        desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->explicitRemote == marked);
+        session.Stop("test");
+    }
+    CHECK_FALSE(Arcane::Remote::HostSession::Config{}.explicitRemote);
+
+    Arcane::Test::TempDir old("remote-descriptor-explicit");
+    const auto path = old.path / "editor-77.json";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << R"({"protocol":1,"hostKind":"editor","pid":77,"port":5555,"token":"t"})";
+    }
+    const auto back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK_FALSE(back->explicitRemote);
+
+    const auto read = [](const char* relative) {
+        std::ifstream in(Arcane::Test::RepoRoot() / relative);
+        REQUIRE(in.good());
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    const auto lineWith = [](const std::string& text, const std::string& needle) {
+        const auto at = text.find(needle);
+        REQUIRE(at != std::string::npos);
+        return text.substr(at, text.find('\n', at) - at);
+    };
+    const std::regex editorFlag(R"(rc\.explicitRemote\s*=\s*m_config\.remote;)");
+    const std::regex serverFlag(R"(rc\.explicitRemote\s*=\s*m_cfg\.remote;)");
+    CHECK(std::regex_search(lineWith(read("Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp"), "rc.explicitRemote"), editorFlag));
+    CHECK(std::regex_search(lineWith(read("Source/Programs/ArcaneRuntimeHost/src/RuntimeApp.cpp"), "rc.explicitRemote"), editorFlag));
+    CHECK(std::regex_search(lineWith(read("Source/Programs/ArcaneServer/src/ServerApp.cpp"), "rc.explicitRemote"), serverFlag));
+}
+
+// B7 fix round 1 (M2): Cli takes the next token as --client's value even when it
+// is another flag, so --client --headless would swallow --headless. Both hosts
+// refuse that and an empty name, as --remote-descriptor does (exit 2).
+TEST_CASE("host --client refuses an empty name or another flag as its value", "[host][remote]") {
+    char* flagValue[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                         const_cast<char*>("--client"), const_cast<char*>("--headless")};
+    char* emptyValue[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                          const_cast<char*>("--client=")};
+    char* named[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                     const_cast<char*>("--client"), const_cast<char*>("b7-x")};
+    auto h0 = Arcane::HostConfig::Parse(4, flagValue);
+    CHECK_FALSE(h0.config);
+    CHECK(h0.exitCode == 2);
+    auto h1 = Arcane::HostConfig::Parse(3, emptyValue);
+    CHECK_FALSE(h1.config);
+    CHECK(h1.exitCode == 2);
+    auto h2 = Arcane::HostConfig::Parse(4, named);
+    REQUIRE(h2.config);
+    CHECK(h2.config->remoteClient == "b7-x");
+    char* serverFlag[] = {const_cast<char*>("ArcaneServer"), const_cast<char*>("--project"),
+                          const_cast<char*>("ReferenceProject"), const_cast<char*>("--remote"),
+                          const_cast<char*>("--client"), const_cast<char*>("--frames")};
+    auto s0 = Arcane::Server::ServerConfig::Parse(6, serverFlag);
+    CHECK_FALSE(s0.config);
+    CHECK(s0.exitCode == 2);
+}
+
+TEST_CASE("omitted --owner-pid is zero, and a dead owner pid exits", "[host][remote]") {
+    // The flag: omitted is 0, typed is the number (HostConfig and ServerConfig).
+    {
+        char* bare[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote")};
+        char* owned[] = {const_cast<char*>("ArcaneEditor"), const_cast<char*>("--remote"),
+                         const_cast<char*>("--owner-pid"), const_cast<char*>("4242")};
+        auto h0 = Arcane::HostConfig::Parse(2, bare);
+        auto h1 = Arcane::HostConfig::Parse(4, owned);
+        REQUIRE(h0.config);
+        REQUIRE(h1.config);
+        CHECK(h0.config->ownerPid == 0);
+        CHECK(h1.config->ownerPid == 4242);
+        char* serverBare[] = {const_cast<char*>("ArcaneServer"), const_cast<char*>("--project"),
+                              const_cast<char*>("ReferenceProject"), const_cast<char*>("--remote")};
+        char* serverOwned[] = {const_cast<char*>("ArcaneServer"), const_cast<char*>("--project"),
+                               const_cast<char*>("ReferenceProject"), const_cast<char*>("--remote"),
+                               const_cast<char*>("--owner-pid"), const_cast<char*>("4242")};
+        auto s0 = Arcane::Server::ServerConfig::Parse(4, serverBare);
+        auto s1 = Arcane::Server::ServerConfig::Parse(6, serverOwned);
+        REQUIRE(s0.config);
+        REQUIRE(s1.config);
+        CHECK(s0.config->ownerPid == 0);
+        CHECK(s1.config->ownerPid == 4242);
+    }
+
+    // HostSession, ownerPid 0: nothing is watched, nothing exits, the key reads 0 across Start and the rewrite.
+    {
+        RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+        Arcane::Test::TempDir tmp("remote-session-owner0");
+        auto cfg = ServerConfig(tmp.path);
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->ownerPid == 0);
+        CHECK_FALSE(session.DrainFrame(1));
+        CHECK(session.ExitReason() == nullptr);
+        std::error_code ec;
+        std::filesystem::remove(session.DescriptorFile(), ec);
+        session.MarkStopping();   // the heartbeat rewrite
+        desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->ownerPid == 0);
+        session.Stop("test");
+    }
+
+    // HostSession, a dead owner: the first pid below 0x0FFFFFF0 that IsProcessLive refuses
+    // (never this process, never the shell). DrainFrame takes the idle exit.
+    {
+        std::uint32_t dead = 0x0FFFFFF0u;
+        while (dead > 1u && Arcane::Platform::IsProcessLive(dead, 0))
+            --dead;
+        REQUIRE(dead > 1u);
+        REQUIRE_FALSE(Arcane::Platform::IsProcessLive(dead, 0));
+        RemoteTest::ScopedHostKind kindGuard(Arcane::Remote::HostKind::Editor);
+        Arcane::Test::TempDir tmp("remote-session-ownerdead");
+        auto cfg = ServerConfig(tmp.path);
+        cfg.ownerPid = dead;
+        Arcane::Remote::HostSession session(cfg);
+        REQUIRE(session.Start());
+        const auto desc = Arcane::Remote::ReadDescriptor(session.DescriptorFile());
+        REQUIRE(desc);
+        CHECK(desc->ownerPid == dead);
+        CHECK(session.DrainFrame(1));
+        REQUIRE(session.ExitReason() != nullptr);
+        CHECK(std::string(session.ExitReason()) == "remote-idle");
+        session.Stop("test");
+    }
+
+    // Source pins: the idle assignments key off the explicit --remote and maxFrames/frames (never headless),
+    // through Arming's helpers, and every rc block copies ownerPid through Arming::OwnerPid.
+    const auto read = [](const char* relative) {
+        std::ifstream in(Arcane::Test::RepoRoot() / relative);
+        REQUIRE(in.good());
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    const auto lineWith = [](const std::string& text, const std::string& needle) {
+        const auto at = text.find(needle);
+        REQUIRE(at != std::string::npos);
+        const auto end = text.find('\n', at);
+        return text.substr(at, end - at);
+    };
+    const std::string runtime = read("Source/Programs/ArcaneRuntimeHost/src/RuntimeApp.cpp");
+    const std::string editor = read("Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    const std::string server = read("Source/Programs/ArcaneServer/src/ServerApp.cpp");
+    const std::string runtimeIdle = lineWith(runtime, "rc.idleExitSeconds");
+    const std::string editorIdle = lineWith(editor, "rc.idleExitSeconds");
+    CHECK(runtimeIdle.find("headless") == std::string::npos);
+    CHECK(runtimeIdle.find("Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames,") != std::string::npos);
+    CHECK(editorIdle.find("headless") == std::string::npos);
+    CHECK(editorIdle.find("Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames,") != std::string::npos);
+    CHECK(lineWith(server, "rc.idleExitSeconds").find("Arming::IdleExitSeconds(m_cfg.remote, m_cfg.frames,") != std::string::npos);
+    CHECK(lineWith(runtime, "rc.ownerPid").find("Arming::OwnerPid(m_config.remote,") != std::string::npos);
+    CHECK(lineWith(editor, "rc.ownerPid").find("Arming::OwnerPid(m_config.remote,") != std::string::npos);
+    CHECK(lineWith(server, "rc.ownerPid").find("Arming::OwnerPid(m_cfg.remote,") != std::string::npos);
+}
+
+// B7 fix round 1 (C2): editor.remote.enable defaults ON, so the editor a user
+// opens by hand arms a HostSession with no --remote. That editor must never
+// end itself on the idle timer (outside host.quit's unsaved-changes guard) and
+// never watch an owner pid: only an explicit --remote (servitor launch always
+// passes it) arms either, and only on an open-ended run.
+TEST_CASE("an editor armed only by editor.remote.enable never idle-exits or watches an owner", "[host][remote]") {
+    const Arcane::HostConfig byHand{};   // editor.remote.enable at its default, no --remote, no --frames
+    REQUIRE_FALSE(byHand.remote);
+    REQUIRE(byHand.maxFrames == 0);
+    REQUIRE(byHand.remoteIdleExitSeconds == 600);
+
+    // The editor's session config comes from these lines (EditorAppFrame.cpp is
+    // not compiled into ArcaneTests): both must key off the explicit --remote.
+    std::ifstream in(Arcane::Test::RepoRoot() / "Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    REQUIRE(in.good());
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string editor = ss.str();
+    const auto lineWith = [&editor](const std::string& needle) {
+        const auto at = editor.find(needle);
+        REQUIRE(at != std::string::npos);
+        return editor.substr(at, editor.find('\n', at) - at);
+    };
+    // m_config.remote as a whole word: m_config.remoteIdleExitSeconds is not the flag.
+    const std::regex explicitRemote(R"(m_config\.remote\b)");
+    CHECK(std::regex_search(lineWith("rc.idleExitSeconds"), explicitRemote));
+    CHECK(std::regex_search(lineWith("rc.ownerPid"), explicitRemote));
+
+    // The rule those lines call: the hand-opened editor gets neither; a Servitor
+    // launch (--remote, open-ended) keeps both; --frames N never idles out.
+    using Arming = Arcane::Remote::Arming;
+    CHECK(Arming::IdleExitSeconds(byHand.remote, byHand.maxFrames, byHand.remoteIdleExitSeconds) == 0);
+    CHECK(Arming::OwnerPid(byHand.remote, 4242) == 0);
+    CHECK(Arming::IdleExitSeconds(true, 0, 600) == 600);
+    CHECK(Arming::IdleExitSeconds(true, 5, 600) == 0);
+    CHECK(Arming::OwnerPid(true, 4242) == 4242);
+}
+
+// Final fix pass (b7 m5): a Config built without Arming never idles out. All
+// three host sites set idleExitSeconds through Arming::IdleExitSeconds; a
+// future site that forgets must not reopen C2 with a 600 s default.
+TEST_CASE("HostSession::Config's idle exit defaults to never", "[host][remote]") {
+    const Arcane::Remote::HostSession::Config cfg{};
+    CHECK(cfg.idleExitSeconds == 0u);
+}
+
+TEST_CASE("a descriptor without ownerPid reads zero, and one with it round-trips", "[host][remote][descriptor]") {
+    Arcane::Test::TempDir tmp("remote-descriptor-owner");
+    const auto path = tmp.path / "runtime-77.json";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << R"({"protocol":1,"hostKind":"runtime","pid":77,"port":5555,"token":"t"})";
+    }
+    auto back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK(back->ownerPid == 0);
+    Arcane::Remote::Descriptor d = *back;
+    d.ownerPid = 4242;
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(path, d));
+    back = Arcane::Remote::ReadDescriptor(path);
+    REQUIRE(back);
+    CHECK(back->ownerPid == 4242);
+}
 #endif

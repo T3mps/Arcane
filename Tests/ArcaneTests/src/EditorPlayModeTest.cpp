@@ -21,7 +21,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -49,6 +51,7 @@
 
 #include <Manifold2D/Physics/PhysicsWorld.hpp>
 
+#include "Helpers/ConstantScan.hpp"
 #include "Helpers/TestTypeContext.hpp"
 #include "../../Fixtures/HotReloadPlugin/HotReloadShared.hpp"
 
@@ -97,6 +100,94 @@ TEST_CASE("Play snapshots and Stop restores the authored registry", "[editor]")
         if (Arcane::SpriteRenderer* s = restored.GetComponent<Arcane::SpriteRenderer>(le))
         { CHECK(s->sortingLayer == 3); found = true; }
     CHECK(found);
+}
+
+#if !defined(ARC_BUILD_DIST)   // PlaySession::FailNextRestoreForTesting is compiled out of Dist
+TEST_CASE("a failed Stop stays in Play and a second Stop restores", "[editor][play]")
+{
+    Arcane::Runtime runtime(Arcane::Test::Process());
+    Astra::Registry& reg = runtime.Registry();
+    Arcane::RegisterSceneComponents(reg);
+
+    const Astra::Entity e = reg.CreateEntity();
+    Arcane::SpriteRenderer sp; sp.sortingLayer = 3;
+    reg.AddComponent<Arcane::SpriteRenderer>(e, sp);
+
+    Arcane::Editor::PlaySession play;
+    REQUIRE(play.Play(runtime));
+    REQUIRE(play.IsPlaying());
+
+    const auto sortingLayer = [&runtime]() {
+        Astra::Registry& live = runtime.Registry();
+        for (Astra::Entity le : live.GetEntityManager())
+            if (Arcane::SpriteRenderer* s = live.GetComponent<Arcane::SpriteRenderer>(le))
+                return static_cast<int>(s->sortingLayer);
+        return -1;
+    };
+    {
+        Astra::Registry& live = runtime.Registry();
+        for (Astra::Entity le : live.GetEntityManager())
+            if (Arcane::SpriteRenderer* s = live.GetComponent<Arcane::SpriteRenderer>(le))
+                s->sortingLayer = 99;
+    }
+
+    // The restore fails: Stop reports it, Play stays, the play-time sentinel is untouched.
+    play.FailNextRestoreForTesting();
+    CHECK_FALSE(play.Stop(runtime));
+    CHECK(play.IsPlaying());
+    CHECK(sortingLayer() == 99);
+    CHECK(runtime.Loop().IsPaused());   // paused on both outcomes
+
+    // The flag was one-shot: the second Stop restores the authored value.
+    CHECK(play.Stop(runtime));
+    CHECK_FALSE(play.IsPlaying());
+    CHECK(play.Mode() == Arcane::Editor::EditorMode::Edit);
+    CHECK(sortingLayer() == 3);
+}
+#endif
+
+TEST_CASE("a failed Stop is wired through Save, Clear and the plugin Poll", "[editor][play]")
+{
+    const auto read = [](const char* relative) {
+        std::ifstream in(Arcane::Test::RepoRoot() / relative);
+        REQUIRE(in.good());
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    };
+    const std::string play  = read("Source/Programs/ArcaneEditor/src/App/PlayMode.cpp");
+    const std::string frame = read("Source/Programs/ArcaneEditor/src/App/EditorAppFrame.cpp");
+    const std::string scene = read("Source/Programs/ArcaneEditor/src/App/EditorAppScene.cpp");
+
+    const std::size_t stop = play.find("bool PlaySession::Stop(");
+    REQUIRE(stop != std::string::npos);
+    const std::size_t fail = play.find("if (!ok)", stop);
+    const std::size_t edit = play.find("m_mode = EditorMode::Edit", stop);
+    REQUIRE(fail != std::string::npos);
+    REQUIRE(edit != std::string::npos);
+    CHECK(fail < edit);
+
+    CHECK(frame.find("could not be stopped") != std::string::npos);
+    CHECK(scene.find("PushPlayStopFailedModal()") != std::string::npos);   // Clear shares the Save button's modal
+    CHECK(frame.find("if (!InPlayMode())") != std::string::npos);
+    CHECK(frame.find("editor.play.failnextrestore") != std::string::npos);
+    // The test hook is compiled out of Dist: method, member and branch sit inside the guard.
+    const std::string hdr = read("Source/Programs/ArcaneEditor/src/App/PlayMode.hpp");
+    const std::size_t hook = hdr.find("FailNextRestoreForTesting");
+    REQUIRE(hook != std::string::npos);
+    const std::size_t hookGuard = hdr.rfind("#if !defined(ARC_BUILD_DIST)", hook);
+    REQUIRE(hookGuard != std::string::npos);
+    CHECK(hdr.find("#endif", hookGuard) > hook);
+    const std::size_t branch = play.find("m_failNextRestore");
+    REQUIRE(branch != std::string::npos);
+    const std::size_t branchGuard = play.rfind("#if !defined(ARC_BUILD_DIST)", branch);
+    REQUIRE(branchGuard != std::string::npos);
+    CHECK(play.find("#endif", branchGuard) > branch);
+    const std::size_t poll = frame.find("m_plugin->Poll();");
+    REQUIRE(poll != std::string::npos);
+    const std::size_t guardAt = frame.rfind("if (!InPlayMode())", poll);
+    REQUIRE(guardAt != std::string::npos);   // the guard text must exist before its position means anything
+    CHECK(poll - guardAt < 120);             // the guard is the statement right above
 }
 
 namespace

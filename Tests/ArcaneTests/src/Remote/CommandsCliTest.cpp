@@ -2,8 +2,11 @@
 #include <Servitor/Commands.hpp>
 #include <Servitor/Client.hpp>
 #include <Servitor/Discover.hpp>
+#include <Servitor/FanOut.hpp>
 #include <Arcane/Project/Project.hpp> // EditorLock::Self (the default --client names this pid)
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <Servitor/Verbs.hpp>
 #include <Arcane/Remote/Commands/CatalogCommands.hpp>
 #include <Arcane/Remote/Descriptor.hpp>
@@ -13,8 +16,15 @@
 #include "RemoteDemoArgs.hpp"
 #include "RemoteTestSupport.hpp"
 #include "../Helpers/TestEnvironment.hpp" // Arcane::Test::TempDir
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#if defined(_WIN32)
+    #include <io.h>
+#else
+    #include <unistd.h>
+#endif
 #include <optional>
 #include <set>
 #include <string>
@@ -633,8 +643,8 @@ TEST_CASE("launch and commands refuse --host and --pid, status filters by them, 
 }
 // ---- Final fix round 2 ----------------------------------------------------
 
-// M-1: an explicit --client on a verb that posts nothing (status, launch,
-// commands, list) would be dropped: refused. The default name is not a flag.
+// M-1: an explicit --client on a verb that posts nothing (commands, list)
+// would be dropped: refused. launch and status take it (Task 21). The default name is not a flag.
 TEST_CASE("an explicit --client is refused by verbs that post no call", "[servitor][client]") {
     Servitor::GlobalOptions opt;
     std::string error;
@@ -644,12 +654,15 @@ TEST_CASE("an explicit --client is refused by verbs that post no call", "[servit
         CHECK_FALSE(Servitor::UnusedGlobal(row, opt).has_value());   // the default is never a refusal
     REQUIRE(ParseFlags({"servitor", "--client", "ci", "status"}, opt, error));
     CHECK(opt.clientSet);
-    for (const char* words : {"status", "launch", "commands", "list"}) {
+    for (const char* words : {"commands", "list"}) {
         INFO(words);
         const auto problem = Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt);
         REQUIRE(problem.has_value());
         CHECK(*problem == "--client does not apply to " + std::string(words));
     }
+    // launch records the name in the host's descriptor and status filters by it.
+    for (const char* words : {"status", "launch"})
+        CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt).has_value());
     for (const char* words : {"cvar set", "call", "wait", "quit"})
         CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb(words), opt).has_value());
 }
@@ -758,6 +771,481 @@ TEST_CASE("servitor --help and -h with no verb print the usage and exit 0", "[se
     CHECK(Servitor::Run(2, const_cast<char**>(longForm)) == 0);
     const char* shortForm[] = {"servitor", "--json", "-h"};
     CHECK(Servitor::Run(3, const_cast<char**>(shortForm)) == 0);
+}
+
+namespace
+{
+// Redirects one process stream (stdout or stderr) to a temp file for the scope,
+// restoring it on every path (the HostConfigTest StderrCapture shape).
+class StreamCapture
+{
+public:
+    explicit StreamCapture(std::FILE* stream) : m_stream(stream)
+    {
+        std::fflush(m_stream);
+#if defined(_WIN32)
+        m_saved = _dup(_fileno(m_stream));
+#else
+        m_saved = dup(fileno(m_stream));
+#endif
+        static int n = 0;
+        m_path = std::filesystem::temp_directory_path() / ("servitor_stream_" + std::to_string(++n) + ".txt");
+        std::FILE* redirected = nullptr;
+#if defined(_WIN32)
+        if (freopen_s(&redirected, m_path.string().c_str(), "w", m_stream) != 0)
+            redirected = nullptr;
+#else
+        redirected = std::freopen(m_path.string().c_str(), "w", m_stream);
+#endif
+        m_ok = m_saved != -1 && redirected != nullptr;
+    }
+    StreamCapture(const StreamCapture&) = delete;
+    StreamCapture& operator=(const StreamCapture&) = delete;
+    ~StreamCapture()
+    {
+        Restore();
+        std::error_code ec;
+        std::filesystem::remove(m_path, ec);
+    }
+    bool Ok() const { return m_ok; }
+    std::string Text()
+    {
+        Restore();
+        std::ifstream in(m_path, std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+
+private:
+    void Restore()
+    {
+        if (m_restored)
+            return;
+        m_restored = true;
+        std::fflush(m_stream);
+        if (m_saved != -1) {
+#if defined(_WIN32)
+            _dup2(m_saved, _fileno(m_stream));
+            _close(m_saved);
+#else
+            dup2(m_saved, fileno(m_stream));
+            close(m_saved);
+#endif
+            m_saved = -1;
+        }
+        std::clearerr(m_stream);
+    }
+    std::FILE* m_stream;
+    int m_saved = -1;
+    bool m_ok = false;
+    bool m_restored = false;
+    std::filesystem::path m_path;
+};
+
+struct RunStreams {
+    int exitCode = -1;
+    std::string out;
+    std::string err;
+    bool captured = false;
+};
+
+RunStreams RunCaptured(std::vector<std::string> args)
+{
+    std::vector<char*> argv;
+    for (std::string& a : args)
+        argv.push_back(a.data());
+    RunStreams r;
+    StreamCapture out(stdout);
+    StreamCapture err(stderr);
+    r.captured = out.Ok() && err.Ok();
+    r.exitCode = Servitor::Run(static_cast<int>(argv.size()), argv.data());
+    r.err = err.Text();
+    r.out = out.Text();
+    return r;
+}
+} // namespace
+
+TEST_CASE("json usage and a verbose posted call leave stderr empty", "[remote][cli]") {
+    // Early ParseArgs failures return before out.format is assigned, so the
+    // default Human format used to send the usage to stderr.
+    const std::vector<std::vector<std::string>> early = {
+        {"servitor", "--json", "--host"},
+        {"servitor", "--format", "json", "--timeout"},
+        {"servitor", "--json", "--format", "not-a-format"},
+        {"servitor", "--json", "--not-a-flag"},   // verb-match failure, after ParseArgs
+    };
+    for (const auto& args : early) {
+        INFO(args.back());
+        const RunStreams r = RunCaptured(args);
+        REQUIRE(r.captured);
+        CHECK(r.exitCode == 2);
+        CHECK(r.err.empty());
+        const auto env = nlohmann::json::parse(r.out, nullptr, false);
+        REQUIRE(env.is_object());
+        CHECK(env.at("ok") == false);
+        CHECK(env.at("errors").at(0).at("code") == "arg.invalid");
+        CHECK_FALSE(env.at("errors").at(0).at("message").get<std::string>().empty());
+        CHECK(env.at("client").at("exitCode") == 2);
+    }
+    {
+        // ndjson: one result line carrying the same envelope.
+        const RunStreams r = RunCaptured({"servitor", "--format", "ndjson", "--host"});
+        REQUIRE(r.captured);
+        CHECK(r.exitCode == 2);
+        CHECK(r.err.empty());
+        const auto line = nlohmann::json::parse(r.out.substr(0, r.out.find('\n')), nullptr, false);
+        REQUIRE(line.is_object());
+        CHECK(line.at("envelope").at("errors").at(0).at("code") == "arg.invalid");
+    }
+    {
+        // Human stays on stderr.
+        const RunStreams r = RunCaptured({"servitor", "--format", "human", "--host"});
+        REQUIRE(r.captured);
+        CHECK(r.exitCode == 2);
+        CHECK(r.out.empty());
+        CHECK(r.err.find("usage: servitor") != std::string::npos);
+    }
+
+    // Posted: --verbose on json adds the redacted request line to the envelope
+    // and writes nothing to stderr.
+    Servitor::GlobalOptions opt;
+    opt.format = Servitor::Format::Json;
+    opt.verbose = true;
+    Servitor::CallRequest req;
+    req.command = "stats";
+    Captured captured;
+    Arcane::Remote::ClientBlock client;
+    std::string out;
+    std::string err;
+    {
+        StreamCapture so(stdout);
+        StreamCapture se(stderr);
+        REQUIRE(so.Ok());
+        REQUIRE(se.Ok());
+        const Servitor::Printed printed = Servitor::Call(req, opt, &CaptureExchange, &captured, &client);
+        Servitor::Emit(printed, client.exitCode);
+        err = se.Text();
+        out = so.Text();
+    }
+    CHECK_FALSE(captured.body.empty());
+    CHECK(err.empty());
+    CHECK(err.find("servitor request:") == std::string::npos);
+    const auto env = nlohmann::json::parse(out, nullptr, false);
+    REQUIRE(env.is_object());
+    bool sawVerbose = false;
+    for (const auto& w : env.at("warnings"))
+        if (w.at("code") == "servitor.verbose" &&
+            w.at("message").get<std::string>().find("servitor request:") != std::string::npos)
+            sawVerbose = true;
+    CHECK(sawVerbose);
+}
+
+namespace
+{
+struct QuitPosts {
+    std::atomic<int> count{0};
+    std::mutex mutex;
+    std::vector<std::string> kinds;
+};
+
+int FakeQuitPost(const Arcane::Remote::Descriptor& d, const nlohmann::json& call, Arcane::Remote::Envelope* out, void* user)
+{
+    auto& posts = *static_cast<QuitPosts*>(user);
+    {
+        std::lock_guard lock(posts.mutex);
+        posts.kinds.push_back(Arcane::Remote::ToString(d.hostKind));
+    }
+    ++posts.count;
+    *out = Arcane::Remote::MakeOk(call.value("command", std::string{}), nlohmann::json::object(), {});
+    return 0;
+}
+
+// A descriptor file for a LIVE process (this one), so IsStale is false; the
+// kind differs per file, so two files never share a name. explicitRemote: the
+// host was armed by --remote (servitor launch); false is the hand-opened editor.
+void WriteClientDescriptor(const std::filesystem::path& dir, Arcane::Remote::HostKind kind, const std::string& client,
+                           bool explicitRemote = false)
+{
+    Arcane::Remote::Descriptor d;
+    d.hostKind = kind;
+    d.pid = Arcane::EditorLock::Self().pid;
+    d.port = 1;
+    d.token = "tok";
+    d.client = client;
+    d.explicitRemote = explicitRemote;
+    REQUIRE(Arcane::Remote::WriteDescriptorAtomic(
+        Arcane::Remote::DescriptorPath(dir.parent_path().parent_path(), kind, d.pid), d));
+}
+} // namespace
+
+TEST_CASE("omitted --client is not forwarded, and status and quit select the named client", "[servitor][client]") {
+    // (PlanLaunch's half is in LaunchTest.cpp, HostSession's in HostSessionTest.cpp.)
+    Servitor::GlobalOptions opt;
+    std::string error;
+
+    // launch and status parse --client and are not refused for it.
+    for (const char* verb : {"launch", "status"}) {
+        INFO(verb);
+        Servitor::GlobalOptions parsed;
+        error.clear();
+        REQUIRE(ParseFlags({"servitor", "--client", "grok-review-r1", verb}, parsed, error));
+        CHECK(parsed.clientSet);
+        CHECK(parsed.client == "grok-review-r1");
+        const auto problem = Servitor::UnusedGlobal(*Servitor::FindVerb(verb), parsed);
+        CHECK_FALSE(problem.has_value());
+        if (problem)
+            CHECK(problem->find("does not apply") == std::string::npos);
+    }
+
+    // StatusData filters by the descriptor's client when --client was typed.
+    Servitor::Scan scan;
+    Servitor::LiveHost named;
+    named.descriptor.hostKind = Arcane::Remote::HostKind::Runtime;
+    named.descriptor.pid = 11;
+    named.descriptor.client = "grok-review-r1";
+    Servitor::LiveHost unnamed;
+    unnamed.descriptor.hostKind = Arcane::Remote::HostKind::Runtime;
+    unnamed.descriptor.pid = 12;
+    scan.live = {named, unnamed};
+    opt = {};
+    opt.clientSet = true;
+    opt.client = "grok-review-r1";
+    const auto filtered = Servitor::StatusData(scan, opt)["hosts"];
+    REQUIRE(filtered.size() == 1);
+    CHECK(filtered[0]["pid"] == 11);
+    CHECK(filtered[0]["client"] == "grok-review-r1");
+    opt.clientSet = false;   // the default name filters nothing
+    opt.client = Servitor::DefaultClientId();
+    CHECK(Servitor::StatusData(scan, opt)["hosts"].size() == 2);
+
+    // DescriptorsForClient: only exact matches; an empty name matches nothing.
+    Arcane::Test::TempDir tmp("servitor-quit-client");
+    const auto dir = Arcane::Remote::DescriptorDir(tmp.path, false);
+    WriteClientDescriptor(dir, Arcane::Remote::HostKind::Editor, "grok-review-r1");
+    WriteClientDescriptor(dir, Arcane::Remote::HostKind::Runtime, "");
+    REQUIRE(Servitor::DescriptorsForClient(dir, "grok-review-r1").size() == 1);
+    CHECK(Servitor::DescriptorsForClient(dir, "grok-review-r1")[0].hostKind == Arcane::Remote::HostKind::Editor);
+    CHECK(Servitor::DescriptorsForClient(dir, "").empty());
+    CHECK(Servitor::DescriptorsForClient(dir, "other").empty());
+
+    // quit --client with two matches: no --yes is exit 2 and posts nothing; the
+    // empty-client file is not a match.
+    Arcane::Test::TempDir two("servitor-quit-client-two");
+    const auto dir2 = Arcane::Remote::DescriptorDir(two.path, false);
+    WriteClientDescriptor(dir2, Arcane::Remote::HostKind::Editor, "grok-review-r1");
+    WriteClientDescriptor(dir2, Arcane::Remote::HostKind::Runtime, "grok-review-r1");
+    WriteClientDescriptor(dir2, Arcane::Remote::HostKind::Server, "");
+    opt = {};
+    opt.clientSet = true;
+    opt.client = "grok-review-r1";
+    opt.format = Servitor::Format::Json;
+    QuitPosts posts;
+    Servitor::FanOutResult result;
+    CHECK(Servitor::QuitByClient({}, opt, dir2, &FakeQuitPost, &posts, &result) == 2);
+    CHECK(posts.count == 0);
+    const auto refusal = nlohmann::json::parse(result.text, nullptr, false);
+    REQUIRE(refusal.is_object());
+    CHECK(refusal.at("errors").at(0).at("code") == "arg.inapplicable");
+
+    // With --yes (and not --all) each match is quit, and the empty-client host is not.
+    opt.yes = true;
+    CHECK_FALSE(opt.all);
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("quit"), opt).has_value());
+    CHECK(Servitor::QuitByClient({}, opt, dir2, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 2);
+    CHECK(std::count(posts.kinds.begin(), posts.kinds.end(), "server") == 0);
+
+    // One match needs no --yes.
+    posts.count = 0;
+    opt.yes = false;
+    CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+
+    // No match is target.none (4). --pid wins over the tag (B7 fix round 1, I4):
+    // pid 5 is no live host here, so it is target.none too, and nothing is posted.
+    opt.client = "nobody";
+    CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 4);
+    opt.client = "grok-review-r1";
+    opt.pid = 5;
+    posts.count = 0;
+    CHECK(Servitor::QuitByClient({}, opt, dir, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+
+    // --yes without --all is still refused for everything but quit --client.
+    Servitor::GlobalOptions yes;
+    yes.yes = true;
+    const auto plain = Servitor::UnusedGlobal(*Servitor::FindVerb("quit"), yes);
+    REQUIRE(plain.has_value());
+    CHECK(plain->starts_with("--yes applies only with --all"));
+    yes.clientSet = true;
+    CHECK_FALSE(Servitor::UnusedGlobal(*Servitor::FindVerb("quit"), yes).has_value());
+    const auto status = Servitor::UnusedGlobal(*Servitor::FindVerb("status"), yes);
+    REQUIRE(status.has_value());
+    CHECK(status->starts_with("--yes applies only with --all"));
+    const RunStreams run = RunCaptured({"servitor", "--json", "quit", "--yes"});
+    REQUIRE(run.captured);
+    CHECK(run.exitCode == 2);
+    CHECK(run.err.empty());
+    CHECK(run.out.find("--yes applies only with --all") != std::string::npos);
+}
+
+// B7 fix round 1 (C1, I1-I4): `--client X --host H quit` keeps working for a host
+// launched without --client, --host narrows X's own hosts before they are
+// counted, --force and --pid still apply, and one host answers one envelope.
+TEST_CASE("quit --client: --host falls back to an untagged host, narrows, and keeps --force and --pid",
+          "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    opt.clientSet = true;
+    opt.client = "b7-x";
+    opt.format = Servitor::Format::Json;
+    QuitPosts posts;
+    Servitor::FanOutResult result;
+    const auto parsed = [&result] { return nlohmann::json::parse(result.text, nullptr, false); };
+
+    // C1: a runtime servitor launched WITHOUT --client (its descriptor client
+    // is "", and it carries the explicit --remote mark).
+    Arcane::Test::TempDir untagged("servitor-quit-untagged");
+    const auto dirU = Arcane::Remote::DescriptorDir(untagged.path, false);
+    WriteClientDescriptor(dirU, Arcane::Remote::HostKind::Runtime, "", true);
+    opt.hostKind = "runtime";
+    CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+    // I3: one host answers one envelope (top-level ok), not the fan-out wrapper.
+    auto one = parsed();
+    REQUIRE(one.is_object());
+    CHECK(one.value("ok", false));
+    CHECK_FALSE(one.contains("hosts"));
+    // Without --host there is neither a tag match nor a kind to select: exit 4,
+    // nothing posted (it could be the user's own editor).
+    posts.count = 0;
+    opt.hostKind.clear();
+    CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+
+    // The fallback never takes a host another client launched.
+    Arcane::Test::TempDir other("servitor-quit-other-client");
+    const auto dirO = Arcane::Remote::DescriptorDir(other.path, false);
+    WriteClientDescriptor(dirO, Arcane::Remote::HostKind::Runtime, "someone-else");
+    opt.hostKind = "runtime";
+    CHECK(Servitor::QuitByClient({}, opt, dirO, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+    const auto refused = parsed();
+    REQUIRE(refused.is_object());
+    CHECK(refused.at("errors").at(0).at("code") == "target.none");
+    CHECK(refused.at("errors").at(0).at("message").get<std::string>().find("someone-else") != std::string::npos);
+
+    // I1: X owns a runtime and a server; --host runtime selects one before the count.
+    Arcane::Test::TempDir both("servitor-quit-client-both");
+    const auto dirB = Arcane::Remote::DescriptorDir(both.path, false);
+    WriteClientDescriptor(dirB, Arcane::Remote::HostKind::Runtime, "b7-x");
+    WriteClientDescriptor(dirB, Arcane::Remote::HostKind::Server, "b7-x");
+    posts.kinds.clear();
+    CHECK(Servitor::QuitByClient({}, opt, dirB, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+    REQUIRE(posts.kinds.size() == 1);
+    CHECK(posts.kinds.front() == "runtime");
+
+    // I2: --force on the one selected host is not refused as if --all were given.
+    posts.count = 0;
+    const std::vector<std::string> force = {"--force"};
+    CHECK(Servitor::QuitByClient(force, opt, dirB, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+
+    // I4: --pid wins and --client stays the audit header.
+    posts.count = 0;
+    opt.hostKind.clear();
+    opt.pid = Arcane::EditorLock::Self().pid;
+    CHECK(Servitor::QuitByClient({}, opt, dirU, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+
+    // Run -> QuitVerb -> RemoteDirFor -> the fallback (review ruling 2): another
+    // client's runtime under --project is refused by name and nothing connects.
+    const auto arcproj = other.path / "b7.arcproj";
+    {
+        std::ofstream touch(arcproj, std::ios::binary | std::ios::trunc);
+        touch << "{}";
+    }
+    const RunStreams run = RunCaptured({"servitor", "--json", "--project", Servitor::PathUtf8(arcproj), "--client",
+                                        "b7-x", "--host", "runtime", "quit"});
+    REQUIRE(run.captured);
+    CHECK(run.exitCode == 4);
+    CHECK(run.err.empty());
+    CHECK(run.out.find("someone-else") != std::string::npos);
+}
+
+// Final fix pass (I1): the untagged --host fallback takes only a host servitor
+// launched. A hand-opened editor arms remote by default (editor.remote.enable)
+// and records no client, so when X's own editor is gone (idle exit, crash) the
+// fallback must refuse it, even with --force, and post nothing.
+TEST_CASE("quit --client --host never falls back to a host servitor did not launch", "[servitor][client]") {
+    Servitor::GlobalOptions opt;
+    opt.clientSet = true;
+    opt.client = "final-x";
+    opt.format = Servitor::Format::Json;
+    QuitPosts posts;
+    Servitor::FanOutResult result;
+
+    Arcane::Test::TempDir byHand("servitor-quit-hand-editor");
+    const auto dirH = Arcane::Remote::DescriptorDir(byHand.path, false);
+    WriteClientDescriptor(dirH, Arcane::Remote::HostKind::Editor, "");   // the user's editor: no client, no marker
+    opt.hostKind = "editor";
+    for (const std::vector<std::string>& rest : {std::vector<std::string>{}, std::vector<std::string>{"--force"}}) {
+        INFO("rest " << (rest.empty() ? "(none)" : rest.front()));
+        posts.count = 0;
+        CHECK(Servitor::QuitByClient(rest, opt, dirH, &FakeQuitPost, &posts, &result) == 4);
+        CHECK(posts.count == 0);
+        const auto refused = nlohmann::json::parse(result.text, nullptr, false);
+        REQUIRE(refused.is_object());
+        CHECK(refused.at("errors").at(0).at("code") == "target.none");
+        const std::string message = refused.at("errors").at(0).at("message").get<std::string>();
+        CHECK(message.find("editor") != std::string::npos);
+        CHECK(message.find(std::to_string(Arcane::EditorLock::Self().pid)) != std::string::npos);
+    }
+
+    // The same refusal for any kind servitor did not launch.
+    Arcane::Test::TempDir bare("servitor-quit-unmarked-runtime");
+    const auto dirR = Arcane::Remote::DescriptorDir(bare.path, false);
+    WriteClientDescriptor(dirR, Arcane::Remote::HostKind::Runtime, "");
+    opt.hostKind = "runtime";
+    posts.count = 0;
+    CHECK(Servitor::QuitByClient({}, opt, dirR, &FakeQuitPost, &posts, &result) == 4);
+    CHECK(posts.count == 0);
+
+    // An editor servitor launched without --client (explicit --remote) is still
+    // the fallback's: one envelope, one post.
+    Arcane::Test::TempDir launched("servitor-quit-launched-editor");
+    const auto dirL = Arcane::Remote::DescriptorDir(launched.path, false);
+    WriteClientDescriptor(dirL, Arcane::Remote::HostKind::Editor, "", true);
+    opt.hostKind = "editor";
+    posts.count = 0;
+    posts.kinds.clear();
+    CHECK(Servitor::QuitByClient({}, opt, dirL, &FakeQuitPost, &posts, &result) == 0);
+    CHECK(posts.count == 1);
+    REQUIRE(posts.kinds.size() == 1);
+    CHECK(posts.kinds.front() == "editor");
+
+    // Through Run -> QuitVerb -> RemoteDirFor: the hand-opened editor under
+    // --project is refused by name and nothing connects.
+    const auto arcproj = byHand.path / "final.arcproj";
+    {
+        std::ofstream touch(arcproj, std::ios::binary | std::ios::trunc);
+        touch << "{}";
+    }
+    const RunStreams run = RunCaptured({"servitor", "--json", "--project", Servitor::PathUtf8(arcproj), "--client",
+                                        "final-x", "--host", "editor", "quit", "--force"});
+    REQUIRE(run.captured);
+    CHECK(run.exitCode == 4);
+    CHECK(run.err.empty());
+    CHECK(run.out.find("not launched by servitor") != std::string::npos);
+}
+
+// B7 fix round 1 (Task 20 minor): with no format flag, a non-TTY stdout means
+// json for a failed parse too (ScanFormat), as it does for a parsed command line.
+TEST_CASE("a parse failure with no format flag on a non-TTY stdout answers in json", "[remote][cli]") {
+    const RunStreams r = RunCaptured({"servitor", "--host"});
+    REQUIRE(r.captured);
+    CHECK(r.exitCode == 2);
+    CHECK(r.err.empty());
+    CHECK(r.out.find("\"arg.invalid\"") != std::string::npos);
 }
 
 #endif

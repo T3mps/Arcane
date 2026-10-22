@@ -762,16 +762,22 @@ namespace Arcane
                 else
                     why = "handshake matches and the OS build is new enough; the vtable module "
                           "above is what refused the interface";
-                ARC_WARN("ID3D12InfoQueue1 QueryInterface failed (device hr=0x{:08X}, info-queue hr=0x{:08X}). "
-                         "Loaded D3D12Core.dll: {} (D3D12SDKVersion {}). "
-                         "Device module: {} (D3D12SDKVersion {}). "
-                         "InfoQueue module: {} (D3D12SDKVersion {}). "
-                         "Exe requests {}. OS build {}. {}",
-                         static_cast<uint32_t>(deviceQiHr), static_cast<uint32_t>(queueQiHr),
-                         ModulePathOr(loadedCore, "not loaded"), SdkVersionText(coreSdk),
-                         ModulePathOr(deviceModule, "none"), SdkVersionText(deviceSdk),
-                         ModulePathOr(queueModule, "none"), SdkVersionText(queueSdk),
-                         requested, osBuild, why);
+                // The miss is identical for every device this process creates;
+                // log the sentence once. Execution falls through to the queue below.
+                static std::atomic<bool> logged{false};
+                if (!logged.exchange(true))
+                {
+                    ARC_WARN("ID3D12InfoQueue1 QueryInterface failed (device hr=0x{:08X}, info-queue hr=0x{:08X}). "
+                             "Loaded D3D12Core.dll: {} (D3D12SDKVersion {}). "
+                             "Device module: {} (D3D12SDKVersion {}). "
+                             "InfoQueue module: {} (D3D12SDKVersion {}). "
+                             "Exe requests {}. OS build {}. {}",
+                             static_cast<uint32_t>(deviceQiHr), static_cast<uint32_t>(queueQiHr),
+                             ModulePathOr(loadedCore, "not loaded"), SdkVersionText(coreSdk),
+                             ModulePathOr(deviceModule, "none"), SdkVersionText(deviceSdk),
+                             ModulePathOr(queueModule, "none"), SdkVersionText(queueSdk),
+                             requested, osBuild, why);
+                }
             }
         }
 

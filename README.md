@@ -780,7 +780,7 @@ diagnostics and raw D3D12 and Vulkan validation messages. A validation
 message fails the test.
 
 Hosted CI runs the CPU filter twice per leg, on
-`github.run_number` and on that number with `50021` appended.
+`github.run_number` and on `(run_number + 50021) mod 4294967296`.
 
 ### Golden gate
 
