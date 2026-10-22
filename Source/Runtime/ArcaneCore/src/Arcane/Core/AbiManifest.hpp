@@ -14,6 +14,7 @@
 #include <Arcane/Plugin/AbiManifestEngine.hpp>
 #include <Arcane/Input/AbiManifestInput.hpp>
 #include <Arcane/Client/AbiManifestClient.hpp>
+#include <Arcane/Physics2D/AbiManifestPhysics2D.hpp>
 
 #include <cstdint>
 
@@ -21,6 +22,7 @@ namespace Arcane
 {
     constexpr std::uint64_t AbiManifestMix() noexcept
     {
-        return Detail::AbiManifest::FoldGroups(AbiManifestEngineMix(), AbiManifestInputMix(), AbiManifestClientMix());
+        return Detail::AbiManifest::FoldGroups(AbiManifestEngineMix(), AbiManifestInputMix(), AbiManifestClientMix(),
+                                               AbiManifestPhysics2DMix());
     }
 }

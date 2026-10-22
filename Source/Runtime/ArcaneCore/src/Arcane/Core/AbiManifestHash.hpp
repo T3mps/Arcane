@@ -7,8 +7,8 @@
 // group feeds it is described in AbiManifestEngine.hpp.
 //
 // FoldGroups() is THE digest: "engine\n" + the Engine mix (8 LE bytes),
-// "input\n" + the Input mix, "client\n" + the Client mix. The host and the
-// tools fold three real mixes (Core/AbiManifest.hpp); a game TU folds a
+// "input\n" + the Input mix, "client\n" + the Client mix, "physics2d\n" + the
+// Physics2D mix. The host and the tools fold four real mixes (Core/AbiManifest.hpp); a game TU folds a
 // committed sub-digest for a group it cannot see (Plugin/AbiManifestGame.hpp).
 
 #include <cstddef>
@@ -59,12 +59,14 @@ namespace Arcane::Detail::AbiManifest
     constexpr std::uint64_t Opaque(std::size_t) noexcept { return 0; }
 
     // The digest of the three group mixes, in this order.
-    constexpr std::uint64_t FoldGroups(std::uint64_t engine, std::uint64_t input, std::uint64_t client) noexcept
+    constexpr std::uint64_t FoldGroups(std::uint64_t engine, std::uint64_t input, std::uint64_t client,
+                                       std::uint64_t physics2d) noexcept
     {
         Fnv f;
         f.Line("engine"); f.U64(engine);
         f.Line("input");  f.U64(input);
         f.Line("client"); f.U64(client);
+        f.Line("physics2d"); f.U64(physics2d);
         return f.h;
     }
 }

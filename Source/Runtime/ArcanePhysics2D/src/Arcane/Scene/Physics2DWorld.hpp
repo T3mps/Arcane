@@ -90,7 +90,7 @@ namespace Arcane
 
     private:
         friend struct PhysicsSystem2D;
-        friend struct ::Arcane::Detail::AbiManifest::Access;   // hashes these private members (Plugin/AbiManifestEngine.hpp)
+        friend struct ::Arcane::Detail::AbiManifest::Physics2DAccess;   // hashes these private members (Physics2D/AbiManifestPhysics2D.hpp)
         friend struct ::Arcane::Detail::Physics2D::Access;
 
         ARC_PHYSICS2D_API void RecordBody(Arcane::Entity entity, Guid guid, Detail::Physics2D::BodyHandle handle,

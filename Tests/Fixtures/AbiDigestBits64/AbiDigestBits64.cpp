@@ -21,8 +21,10 @@
 #include <cstdlib>
 #include <fstream>
 
-static_assert(!ARC_ABI_GAME_HASHES_INPUT && !ARC_ABI_GAME_HASHES_CLIENT,
-              "AbiDigestBits64 is ArcaneEngine-only: it must fold the committed Input/Client sub-digests");
+// ...and Physics2D (3D-readiness Plan A Task 8 fix round 1): GameModule.hpp no
+// longer reaches a Physics2D header, so an ArcaneEngine-only game cannot see it.
+static_assert(!ARC_ABI_GAME_HASHES_INPUT && !ARC_ABI_GAME_HASHES_CLIENT && !ARC_ABI_GAME_HASHES_PHYSICS2D,
+              "AbiDigestBits64 is ArcaneEngine-only: it must fold the committed Input/Client/Physics2D sub-digests");
 
 extern "C"
 {

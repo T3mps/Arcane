@@ -1,7 +1,7 @@
 #pragma once
 
 // The plugin ABI digest as a GAME translation unit computes it (3D-readiness
-// Plan B Task 2): AbiGameMix() = FoldGroups(Engine, Input, Client)
+// Plan B Task 2): AbiGameMix() = FoldGroups(Engine, Input, Client, Physics2D)
 // (Core/AbiManifestHash.hpp). GameModule.hpp includes this header on its last
 // line; ARC_GAME_MODULE's GamePlugin_ABIDigest and the monolithic static_assert
 // call AbiGameMix(), so the value is the one THIS TU's flags produce.
@@ -10,10 +10,12 @@
 // everything an ArcaneEngine-only game can include, and it carries the Astra
 // defines and Astra::Entity, so a game built with -DASTRA_ENTITY_BITS=64 still
 // exports a different digest. The Input group (Input/AbiManifestInput.hpp) and
-// the Client group (Client/AbiManifestClient.hpp) are hashed when the game can
-// include their manifest headers (its module closure reaches ArcaneInput /
-// ArcaneClient). Otherwise the host's committed sub-digest stands in for the
-// group (kGamePluginABIDigestInput / kGamePluginABIDigestClient,
+// the Client group (Client/AbiManifestClient.hpp) and the Physics2D group
+// (Physics2D/AbiManifestPhysics2D.hpp) are hashed when the game can include
+// their manifest headers (its module closure reaches ArcaneInput / ArcaneClient
+// / ArcanePhysics2D). Otherwise the host's committed sub-digest stands in for
+// the group (kGamePluginABIDigestInput / kGamePluginABIDigestClient /
+// kGamePluginABIDigestPhysics2D,
 // Core/AbiVersion.hpp): a game that cannot include a group's headers cannot
 // depend on that group's layout, and a game project needs no include directory
 // beyond its own module closure. The host compares the one folded value with
@@ -41,6 +43,12 @@
 #define ARC_ABI_GAME_HASHES_CLIENT 0
 #endif
 
+#if __has_include(<Arcane/Physics2D/AbiManifestPhysics2D.hpp>)
+#define ARC_ABI_GAME_HASHES_PHYSICS2D 1
+#else
+#define ARC_ABI_GAME_HASHES_PHYSICS2D 0
+#endif
+
 namespace Arcane
 {
     constexpr std::uint64_t AbiManifestEngineMix() noexcept;   // Plugin/AbiManifestEngine.hpp
@@ -49,6 +57,9 @@ namespace Arcane
 #endif
 #if ARC_ABI_GAME_HASHES_CLIENT
     constexpr std::uint64_t AbiManifestClientMix() noexcept;   // Client/AbiManifestClient.hpp
+#endif
+#if ARC_ABI_GAME_HASHES_PHYSICS2D
+    constexpr std::uint64_t AbiManifestPhysics2DMix() noexcept;   // Physics2D/AbiManifestPhysics2D.hpp
 #endif
 
     constexpr std::uint64_t AbiGameMix() noexcept
@@ -61,9 +72,14 @@ namespace Arcane
             kGamePluginABIDigestInput,
 #endif
 #if ARC_ABI_GAME_HASHES_CLIENT
-            AbiManifestClientMix()
+            AbiManifestClientMix(),
 #else
-            kGamePluginABIDigestClient
+            kGamePluginABIDigestClient,
+#endif
+#if ARC_ABI_GAME_HASHES_PHYSICS2D
+            AbiManifestPhysics2DMix()
+#else
+            kGamePluginABIDigestPhysics2D
 #endif
         );
     }
@@ -75,4 +91,7 @@ namespace Arcane
 #endif
 #if ARC_ABI_GAME_HASHES_CLIENT
 #include <Arcane/Client/AbiManifestClient.hpp>
+#endif
+#if ARC_ABI_GAME_HASHES_PHYSICS2D
+#include <Arcane/Physics2D/AbiManifestPhysics2D.hpp>
 #endif

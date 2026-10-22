@@ -279,7 +279,7 @@ namespace
         std::string head;
         int skipDepth = 0;   // inside a skipped brace group (function body / initialiser)
         const auto top = [&]() { return stack.empty() ? Scope::Namespace : stack.back().kind; };
-        static const std::regex friendRe(R"(\bfriend\s+struct\s+(?:::)?(?:Arcane::)?Detail::AbiManifest::(?:Client)?Access\b)");
+        static const std::regex friendRe(R"(\bfriend\s+struct\s+(?:::)?(?:Arcane::)?Detail::AbiManifest::(?:Client|Physics2D)?Access\b)");
 
         for (std::size_t i = 0; i < text.size(); ++i)
         {
@@ -400,12 +400,13 @@ namespace
         return std::regex_search(manifest, re);
     }
 
-    // The digest's three group manifests (Core/AbiManifest.hpp folds them). The
-    // completeness scans read all three as one text.
+    // The digest's four group manifests (Core/AbiManifest.hpp folds them). The
+    // completeness scans read all four as one text.
     constexpr const char* kManifestFiles[] = {
         "Source/Runtime/ArcaneEngine/src/Arcane/Plugin/AbiManifestEngine.hpp",
         "Source/Client/ArcaneInput/src/Arcane/Input/AbiManifestInput.hpp",
         "Source/Client/ArcaneClient/src/Arcane/Client/AbiManifestClient.hpp",
+        "Source/Runtime/ArcanePhysics2D/src/Arcane/Physics2D/AbiManifestPhysics2D.hpp",
     };
 
     // The Engine group: the one the comment-stability witness copies.
@@ -509,6 +510,7 @@ TEST_CASE("kGamePluginABIDigest equals the compiler-derived mix", "[plugin][abi]
     // The committed sub-digests a game folds for a group it cannot see.
     CHECK(Arcane::kGamePluginABIDigestInput == Arcane::AbiManifestInputMix());
     CHECK(Arcane::kGamePluginABIDigestClient == Arcane::AbiManifestClientMix());
+    CHECK(Arcane::kGamePluginABIDigestPhysics2D == Arcane::AbiManifestPhysics2DMix());
 }
 
 TEST_CASE("a game TU's digest equals the host's with or without the Input and Client headers", "[plugin][abi]")
@@ -517,6 +519,7 @@ TEST_CASE("a game TU's digest equals the host's with or without the Input and Cl
     // the expression ARC_GAME_MODULE exports) hashes all three groups itself.
     STATIC_REQUIRE(ARC_ABI_GAME_HASHES_INPUT == 1);
     STATIC_REQUIRE(ARC_ABI_GAME_HASHES_CLIENT == 1);
+    STATIC_REQUIRE(ARC_ABI_GAME_HASHES_PHYSICS2D == 1);
     CHECK(Arcane::AbiGameMix() == Arcane::AbiManifestMix());
     CHECK(Arcane::AbiGameMix() == Arcane::kGamePluginABIDigest);
     // An ArcaneEngine-only game hashes the Engine group and folds the committed
@@ -524,15 +527,17 @@ TEST_CASE("a game TU's digest equals the host's with or without the Input and Cl
     // load through the digest gate; AbiDigestBits64 static_asserts it is one.)
     using Arcane::Detail::AbiManifest::FoldGroups;
     CHECK(FoldGroups(Arcane::AbiManifestEngineMix(), Arcane::kGamePluginABIDigestInput,
-                     Arcane::kGamePluginABIDigestClient) == Arcane::kGamePluginABIDigest);
+                     Arcane::kGamePluginABIDigestClient, Arcane::kGamePluginABIDigestPhysics2D) == Arcane::kGamePluginABIDigest);
     // Each group moves the fold, and so does the group order.
     const std::uint64_t e = Arcane::AbiManifestEngineMix();
     const std::uint64_t i = Arcane::AbiManifestInputMix();
     const std::uint64_t c = Arcane::AbiManifestClientMix();
-    CHECK(FoldGroups(e ^ 1, i, c) != FoldGroups(e, i, c));
-    CHECK(FoldGroups(e, i ^ 1, c) != FoldGroups(e, i, c));
-    CHECK(FoldGroups(e, i, c ^ 1) != FoldGroups(e, i, c));
-    CHECK(FoldGroups(e, c, i) != FoldGroups(e, i, c));
+    const std::uint64_t p = Arcane::AbiManifestPhysics2DMix();
+    CHECK(FoldGroups(e ^ 1, i, c, p) != FoldGroups(e, i, c, p));
+    CHECK(FoldGroups(e, i ^ 1, c, p) != FoldGroups(e, i, c, p));
+    CHECK(FoldGroups(e, i, c ^ 1, p) != FoldGroups(e, i, c, p));
+    CHECK(FoldGroups(e, i, c, p ^ 1) != FoldGroups(e, i, c, p));
+    CHECK(FoldGroups(e, c, i, p) != FoldGroups(e, i, c, p));
 }
 
 TEST_CASE("a comment-only change does not move the abi digest", "[plugin][abi]")
@@ -1027,4 +1032,9 @@ TEST_CASE("a stale committed sub-digest fails arcane-abi-digest --check", "[plug
     INFO("--check --committed-input: " << input.output);
     CHECK(input.status != 0);
     CHECK(input.output.find("kGamePluginABIDigestInput") != std::string::npos);
+
+    const ToolRun physics2d = RunWithStatus(tool, "--check " + root + " --committed-physics2d 0000000000000001");
+    INFO("--check --committed-physics2d: " << physics2d.output);
+    CHECK(physics2d.status != 0);
+    CHECK(physics2d.output.find("kGamePluginABIDigestPhysics2D") != std::string::npos);
 }

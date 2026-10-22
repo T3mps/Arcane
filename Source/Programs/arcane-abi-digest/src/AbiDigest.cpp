@@ -4,19 +4,22 @@
 //   --print-commented    print the mix with a comment-appended copy of the Engine
 //                        group manifest (Plugin/AbiManifestEngine.hpp)
 //   --write              write build/abi-digest.txt (hex + one newline) and the
-//                        three constants in Core/AbiVersion.hpp
-//                        (kGamePluginABIDigest and the Input / Client sub-digests)
+//                        four constants in Core/AbiVersion.hpp
+//                        (kGamePluginABIDigest and the Input / Client / Physics2D
+//                        sub-digests)
 //   --check              exit 1 if the file is missing or disagrees with the mix,
 //                        kGamePluginABIDigest disagrees with the mix, or a
 //                        committed sub-digest disagrees with its group's mix
 //   --root <dir>         the checkout (default: found upward from cwd, then the exe)
-//   --committed-input <hex>, --committed-client <hex>
+//   --committed-input <hex>, --committed-client <hex>, --committed-physics2d <hex>
 //                        --check only: stand in for the compiled-in
-//                        kGamePluginABIDigestInput / kGamePluginABIDigestClient
+//                        kGamePluginABIDigestInput / kGamePluginABIDigestClient /
+//                        kGamePluginABIDigestPhysics2D
 //                        (the [abi] test's witness that a stale one is caught)
 //
-// The digest is FoldGroups(Engine, Input, Client) (Core/AbiManifestHash.hpp). A
-// game TU that cannot include the Input or Client headers folds the COMMITTED
+// The digest is FoldGroups(Engine, Input, Client, Physics2D)
+// (Core/AbiManifestHash.hpp). A game TU that cannot include the Input, Client or
+// Physics2D headers folds the COMMITTED
 // sub-digest in that group's place (Plugin/AbiManifestGame.hpp), so a stale
 // sub-digest would make every such game disagree with the host: --check fails it.
 //
@@ -43,6 +46,7 @@ namespace
     constexpr std::uint64_t kPlainMix = Arcane::AbiManifestMix();
     constexpr std::uint64_t kInputMix = Arcane::AbiManifestInputMix();
     constexpr std::uint64_t kClientMix = Arcane::AbiManifestClientMix();
+    constexpr std::uint64_t kPhysics2DMix = Arcane::AbiManifestPhysics2DMix();
 
     std::string Hex16(std::uint64_t v)
     {
@@ -108,9 +112,10 @@ int main(int argc, char** argv)
     fs::path root;
     std::uint64_t committedInput = Arcane::kGamePluginABIDigestInput;
     std::uint64_t committedClient = Arcane::kGamePluginABIDigestClient;
+    std::uint64_t committedPhysics2D = Arcane::kGamePluginABIDigestPhysics2D;
     bool overridden = false;
     const char* usage = "usage: arcane-abi-digest --print|--print-commented|--write|--check [--root <dir>] "
-                        "[--committed-input <hex>] [--committed-client <hex>]\n";
+                        "[--committed-input <hex>] [--committed-client <hex>] [--committed-physics2d <hex>]\n";
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
@@ -119,9 +124,10 @@ int main(int argc, char** argv)
         else if (a == "--write") write = true;
         else if (a == "--check") check = true;
         else if (a == "--root" && i + 1 < argc) root = argv[++i];
-        else if ((a == "--committed-input" || a == "--committed-client") && i + 1 < argc)
+        else if ((a == "--committed-input" || a == "--committed-client" || a == "--committed-physics2d") && i + 1 < argc)
         {
-            std::uint64_t& slot = (a == "--committed-input") ? committedInput : committedClient;
+            std::uint64_t& slot = (a == "--committed-input") ? committedInput
+                                : (a == "--committed-client") ? committedClient : committedPhysics2D;
             if (!ParseHex16(argv[++i], slot))
             {
                 std::fprintf(stderr, "arcane-abi-digest: %s wants up to 16 hex digits, not '%s'\n%s", a.c_str(), argv[i], usage);
@@ -161,9 +167,10 @@ int main(int argc, char** argv)
         }
         if (!ReplaceConstant(text, "kGamePluginABIDigest", kPlainMix)
             || !ReplaceConstant(text, "kGamePluginABIDigestInput", kInputMix)
-            || !ReplaceConstant(text, "kGamePluginABIDigestClient", kClientMix))
+            || !ReplaceConstant(text, "kGamePluginABIDigestClient", kClientMix)
+            || !ReplaceConstant(text, "kGamePluginABIDigestPhysics2D", kPhysics2DMix))
         {
-            std::fprintf(stderr, "arcane-abi-digest: %s does not declare the three digest constants as "
+            std::fprintf(stderr, "arcane-abi-digest: %s does not declare the four digest constants as "
                                  "`inline constexpr std::uint64_t <name> = 0x...ull;`\n", header.string().c_str());
             return 1;
         }
@@ -181,9 +188,9 @@ int main(int argc, char** argv)
         if (!hout) { std::fprintf(stderr, "arcane-abi-digest: writing %s failed\n", header.string().c_str()); return 1; }
 
         std::printf("wrote %s: %s\nwrote %s: kGamePluginABIDigest 0x%sull, kGamePluginABIDigestInput 0x%sull, "
-                    "kGamePluginABIDigestClient 0x%sull\nrebuild, then run --check\n",
+                    "kGamePluginABIDigestClient 0x%sull, kGamePluginABIDigestPhysics2D 0x%sull\nrebuild, then run --check\n",
                     file.string().c_str(), hex.c_str(), header.string().c_str(), hex.c_str(),
-                    Hex16(kInputMix).c_str(), Hex16(kClientMix).c_str());
+                    Hex16(kInputMix).c_str(), Hex16(kClientMix).c_str(), Hex16(kPhysics2DMix).c_str());
         return 0;
     }
 
@@ -221,6 +228,12 @@ int main(int argc, char** argv)
     {
         std::fprintf(stderr, "arcane-abi-digest: kGamePluginABIDigestClient is %s but the Client group's mix is %s; run --write\n",
                      Hex16(committedClient).c_str(), Hex16(kClientMix).c_str());
+        rc = 1;
+    }
+    if (committedPhysics2D != kPhysics2DMix)
+    {
+        std::fprintf(stderr, "arcane-abi-digest: kGamePluginABIDigestPhysics2D is %s but the Physics2D group's mix is %s; run --write\n",
+                     Hex16(committedPhysics2D).c_str(), Hex16(kPhysics2DMix).c_str());
         rc = 1;
     }
     if (rc == 0) std::printf("abi digest ok: %s\n", hex.c_str());

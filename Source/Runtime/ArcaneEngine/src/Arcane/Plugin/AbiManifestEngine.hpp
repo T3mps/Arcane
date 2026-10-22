@@ -11,18 +11,21 @@
 #define ARC_PLUGIN_ABI_MANIFEST_ENGINE_HPP
 
 // The ENGINE group of the compiler-derived plugin ABI digest (3D-readiness Plan
-// B, Tasks 1-2). The digest is FoldGroups(Engine, Input, Client)
+// B, Tasks 1-2). The digest is FoldGroups(Engine, Input, Client, Physics2D)
 // (Core/AbiManifestHash.hpp); this header is the Engine group, everything an
 // ArcaneEngine-only game can include. The Input group (InputSnapshot) lives in
-// Input/AbiManifestInput.hpp and the Client group (ClientRuntime,
-// RuntimePresentation) in Client/AbiManifestClient.hpp, so a game TU computes
-// its digest (Plugin/AbiManifestGame.hpp) without the Input or Client include
-// directories.
+// Input/AbiManifestInput.hpp, the Client group (ClientRuntime,
+// RuntimePresentation) in Client/AbiManifestClient.hpp and the Physics2D group
+// (PhysicsWorld2D, the event rows, the body records) in
+// Physics2D/AbiManifestPhysics2D.hpp, so a game TU computes its digest
+// (Plugin/AbiManifestGame.hpp) without the Input, Client or Physics2D include
+// directories: a game whose descriptor does not name ArcanePhysics2D includes
+// no Physics2D or Manifold2D header through GameModule.hpp (Task 8 fix round 1).
 //
 // AbiManifestEngineMix() hashes what the COMPILER says about the game-facing
 // by-value closure: the three Astra layout defines, then sizeof / alignof /
 // offsetof of every struct in the 21 game-facing headers (the kGameFacingHeaders
-// list in ArcaneSpellingGuardTest.cpp) outside the Input and Client groups. It
+// list in ArcaneSpellingGuardTest.cpp) outside the Input, Client and Physics2D groups. It
 // never hashes source text, so a comment-only edit of a listed header leaves the
 // value alone, and a game TU compiled with different ASTRA_ENTITY_* defines gets
 // a different value.
@@ -66,18 +69,13 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
-#include <Arcane/Physics2D.hpp>
-#include <Arcane/Physics2DFwd.hpp>
 #include <Arcane/Plugin/GameComponents.hpp>
 #include <Arcane/Plugin/GameModule.hpp>
 #include <Arcane/Plugin/GameSystems.hpp>
 #include <Arcane/Plugin/PluginABI.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
 #include <Arcane/Scene/Components.hpp>
-#include <Arcane/Scene/Physics2DHandles.hpp>
-#include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
-#include <Arcane/Scene/PhysicsEvents2D.hpp>
 #include <Arcane/Scene/PhysicsSystem2D.hpp>
 #include <Arcane/Scene/SceneCacheRecords.hpp>
 #include <Arcane/Scene/SceneResources.hpp>
@@ -149,18 +147,6 @@ namespace Arcane
             // real. Both follow m_factories, so their offsets are opaque either way.
             f.Field("m_jobsMutex", Opaque(offsetof(Arcane::ProcessContext, m_jobsMutex)), Opaque(sizeof(Arcane::ProcessContext::m_jobsMutex)), Opaque(alignof(decltype(Arcane::ProcessContext::m_jobsMutex))), "std::mutex");
             f.Field("m_jobs", Opaque(offsetof(Arcane::ProcessContext, m_jobs)), sizeof(Arcane::ProcessContext::m_jobs), alignof(decltype(Arcane::ProcessContext::m_jobs)), "std::weak_ptr<Arcane::JobSystem>");
-        }
-
-        static constexpr void R_PhysicsWorld2D(Fnv& f) noexcept
-        {
-            f.Type("Arcane::PhysicsWorld2D", Opaque(sizeof(Arcane::PhysicsWorld2D)), Opaque(alignof(Arcane::PhysicsWorld2D)));
-            f.Field("world", offsetof(Arcane::PhysicsWorld2D, world), sizeof(Arcane::PhysicsWorld2D::world), alignof(decltype(Arcane::PhysicsWorld2D::world)), "std::unique_ptr<Detail::Physics2D::PhysicsWorld>");
-            f.Field("entityToBody", Opaque(offsetof(Arcane::PhysicsWorld2D, entityToBody)), Opaque(sizeof(Arcane::PhysicsWorld2D::entityToBody)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::entityToBody))), "std::unordered_map<Arcane::Entity, Detail::Physics2D::BodyHandle>");
-            f.Field("lastReconcile", Opaque(offsetof(Arcane::PhysicsWorld2D, lastReconcile)), sizeof(Arcane::PhysicsWorld2D::lastReconcile), alignof(decltype(Arcane::PhysicsWorld2D::lastReconcile)), "Arcane::Tick");
-            f.Field("reconciled", Opaque(offsetof(Arcane::PhysicsWorld2D, reconciled)), sizeof(Arcane::PhysicsWorld2D::reconciled), alignof(decltype(Arcane::PhysicsWorld2D::reconciled)), "std::uint32_t");
-            f.Field("bodyRecords", Opaque(offsetof(Arcane::PhysicsWorld2D, bodyRecords)), Opaque(sizeof(Arcane::PhysicsWorld2D::bodyRecords)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::bodyRecords))), "std::unordered_map<std::uint64_t, Detail::Physics2D::BodyRecord>");
-            f.Field("stepEvents", Opaque(offsetof(Arcane::PhysicsWorld2D, stepEvents)), Opaque(sizeof(Arcane::PhysicsWorld2D::stepEvents)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::stepEvents))), "Detail::Physics2D::EventBuffers");
-            f.Field("frameEvents", Opaque(offsetof(Arcane::PhysicsWorld2D, frameEvents)), Opaque(sizeof(Arcane::PhysicsWorld2D::frameEvents)), Opaque(alignof(decltype(Arcane::PhysicsWorld2D::frameEvents))), "Detail::Physics2D::EventBuffers");
         }
 
         static constexpr void R_PhysicsSystem2D(Fnv& f) noexcept
@@ -396,62 +382,8 @@ namespace Arcane
         f.Type("Arcane::Collider2D", Opaque(sizeof(Arcane::Collider2D)), Opaque(alignof(Arcane::Collider2D)));
         f.Field("fixtures", Opaque(offsetof(Arcane::Collider2D, fixtures)), Opaque(sizeof(Arcane::Collider2D::fixtures)), Opaque(alignof(decltype(Arcane::Collider2D::fixtures))), "std::vector<Fixture2D>");
         f.Type("Arcane::PhysicsBodyRef2D", sizeof(Arcane::PhysicsBodyRef2D), alignof(Arcane::PhysicsBodyRef2D));
-        f.Field("handle", offsetof(Arcane::PhysicsBodyRef2D, handle), sizeof(Arcane::PhysicsBodyRef2D::handle), alignof(decltype(Arcane::PhysicsBodyRef2D::handle)), "Detail::Physics2D::BodyHandle");
+        f.Field("handle", offsetof(Arcane::PhysicsBodyRef2D, handle), sizeof(Arcane::PhysicsBodyRef2D::handle), alignof(decltype(Arcane::PhysicsBodyRef2D::handle)), "std::uint64_t");
         f.Field("appliedScale", offsetof(Arcane::PhysicsBodyRef2D, appliedScale), sizeof(Arcane::PhysicsBodyRef2D::appliedScale), alignof(decltype(Arcane::PhysicsBodyRef2D::appliedScale)), "glm::vec2");
-        f.Type("Arcane::ContactSide2D", sizeof(Arcane::ContactSide2D), alignof(Arcane::ContactSide2D));
-        f.Field("entity", offsetof(Arcane::ContactSide2D, entity), sizeof(Arcane::ContactSide2D::entity), alignof(decltype(Arcane::ContactSide2D::entity)), "Arcane::Entity");
-        f.Field("guid", offsetof(Arcane::ContactSide2D, guid), sizeof(Arcane::ContactSide2D::guid), alignof(decltype(Arcane::ContactSide2D::guid)), "Guid");
-        f.Field("fixture", offsetof(Arcane::ContactSide2D, fixture), sizeof(Arcane::ContactSide2D::fixture), alignof(decltype(Arcane::ContactSide2D::fixture)), "std::uint32_t");
-        f.Type("Arcane::ContactBegin2D", sizeof(Arcane::ContactBegin2D), alignof(Arcane::ContactBegin2D));
-        f.Field("a", offsetof(Arcane::ContactBegin2D, a), sizeof(Arcane::ContactBegin2D::a), alignof(decltype(Arcane::ContactBegin2D::a)), "ContactSide2D");
-        f.Field("b", offsetof(Arcane::ContactBegin2D, b), sizeof(Arcane::ContactBegin2D::b), alignof(decltype(Arcane::ContactBegin2D::b)), "ContactSide2D");
-        f.Type("Arcane::ContactEnd2D", sizeof(Arcane::ContactEnd2D), alignof(Arcane::ContactEnd2D));
-        f.Field("a", offsetof(Arcane::ContactEnd2D, a), sizeof(Arcane::ContactEnd2D::a), alignof(decltype(Arcane::ContactEnd2D::a)), "ContactSide2D");
-        f.Field("b", offsetof(Arcane::ContactEnd2D, b), sizeof(Arcane::ContactEnd2D::b), alignof(decltype(Arcane::ContactEnd2D::b)), "ContactSide2D");
-        f.Type("Arcane::ContactHit2D", sizeof(Arcane::ContactHit2D), alignof(Arcane::ContactHit2D));
-        f.Field("a", offsetof(Arcane::ContactHit2D, a), sizeof(Arcane::ContactHit2D::a), alignof(decltype(Arcane::ContactHit2D::a)), "ContactSide2D");
-        f.Field("b", offsetof(Arcane::ContactHit2D, b), sizeof(Arcane::ContactHit2D::b), alignof(decltype(Arcane::ContactHit2D::b)), "ContactSide2D");
-        f.Field("point", offsetof(Arcane::ContactHit2D, point), sizeof(Arcane::ContactHit2D::point), alignof(decltype(Arcane::ContactHit2D::point)), "glm::vec2");
-        f.Field("normal", offsetof(Arcane::ContactHit2D, normal), sizeof(Arcane::ContactHit2D::normal), alignof(decltype(Arcane::ContactHit2D::normal)), "glm::vec2");
-        f.Field("approachSpeed", offsetof(Arcane::ContactHit2D, approachSpeed), sizeof(Arcane::ContactHit2D::approachSpeed), alignof(decltype(Arcane::ContactHit2D::approachSpeed)), "float");
-        f.Type("Arcane::SensorBegin2D", sizeof(Arcane::SensorBegin2D), alignof(Arcane::SensorBegin2D));
-        f.Field("sensor", offsetof(Arcane::SensorBegin2D, sensor), sizeof(Arcane::SensorBegin2D::sensor), alignof(decltype(Arcane::SensorBegin2D::sensor)), "ContactSide2D");
-        f.Field("visitor", offsetof(Arcane::SensorBegin2D, visitor), sizeof(Arcane::SensorBegin2D::visitor), alignof(decltype(Arcane::SensorBegin2D::visitor)), "ContactSide2D");
-        f.Type("Arcane::SensorEnd2D", sizeof(Arcane::SensorEnd2D), alignof(Arcane::SensorEnd2D));
-        f.Field("sensor", offsetof(Arcane::SensorEnd2D, sensor), sizeof(Arcane::SensorEnd2D::sensor), alignof(decltype(Arcane::SensorEnd2D::sensor)), "ContactSide2D");
-        f.Field("visitor", offsetof(Arcane::SensorEnd2D, visitor), sizeof(Arcane::SensorEnd2D::visitor), alignof(decltype(Arcane::SensorEnd2D::visitor)), "ContactSide2D");
-        f.Type("Arcane::ContactPoint2D", sizeof(Arcane::ContactPoint2D), alignof(Arcane::ContactPoint2D));
-        f.Field("self", offsetof(Arcane::ContactPoint2D, self), sizeof(Arcane::ContactPoint2D::self), alignof(decltype(Arcane::ContactPoint2D::self)), "ContactSide2D");
-        f.Field("other", offsetof(Arcane::ContactPoint2D, other), sizeof(Arcane::ContactPoint2D::other), alignof(decltype(Arcane::ContactPoint2D::other)), "ContactSide2D");
-        f.Field("normal", offsetof(Arcane::ContactPoint2D, normal), sizeof(Arcane::ContactPoint2D::normal), alignof(decltype(Arcane::ContactPoint2D::normal)), "glm::vec2");
-        f.Field("pointCount", offsetof(Arcane::ContactPoint2D, pointCount), sizeof(Arcane::ContactPoint2D::pointCount), alignof(decltype(Arcane::ContactPoint2D::pointCount)), "std::uint32_t");
-        f.Type("Arcane::PhysicsEvents2D", sizeof(Arcane::PhysicsEvents2D), alignof(Arcane::PhysicsEvents2D));
-        f.Field("contactBegin", offsetof(Arcane::PhysicsEvents2D, contactBegin), sizeof(Arcane::PhysicsEvents2D::contactBegin), alignof(decltype(Arcane::PhysicsEvents2D::contactBegin)), "std::span<const ContactBegin2D>");
-        f.Field("contactEnd", offsetof(Arcane::PhysicsEvents2D, contactEnd), sizeof(Arcane::PhysicsEvents2D::contactEnd), alignof(decltype(Arcane::PhysicsEvents2D::contactEnd)), "std::span<const ContactEnd2D>");
-        f.Field("contactHit", offsetof(Arcane::PhysicsEvents2D, contactHit), sizeof(Arcane::PhysicsEvents2D::contactHit), alignof(decltype(Arcane::PhysicsEvents2D::contactHit)), "std::span<const ContactHit2D>");
-        f.Field("sensorBegin", offsetof(Arcane::PhysicsEvents2D, sensorBegin), sizeof(Arcane::PhysicsEvents2D::sensorBegin), alignof(decltype(Arcane::PhysicsEvents2D::sensorBegin)), "std::span<const SensorBegin2D>");
-        f.Field("sensorEnd", offsetof(Arcane::PhysicsEvents2D, sensorEnd), sizeof(Arcane::PhysicsEvents2D::sensorEnd), alignof(decltype(Arcane::PhysicsEvents2D::sensorEnd)), "std::span<const SensorEnd2D>");
-        f.Type("Arcane::BodyMotion2D", sizeof(Arcane::BodyMotion2D), alignof(Arcane::BodyMotion2D));
-        f.Field("velocityX", offsetof(Arcane::BodyMotion2D, velocityX), sizeof(Arcane::BodyMotion2D::velocityX), alignof(decltype(Arcane::BodyMotion2D::velocityX)), "float");
-        f.Field("velocityY", offsetof(Arcane::BodyMotion2D, velocityY), sizeof(Arcane::BodyMotion2D::velocityY), alignof(decltype(Arcane::BodyMotion2D::velocityY)), "float");
-        f.Field("bodyReady", offsetof(Arcane::BodyMotion2D, bodyReady), sizeof(Arcane::BodyMotion2D::bodyReady), alignof(decltype(Arcane::BodyMotion2D::bodyReady)), "bool");
-        f.Field("supported", offsetof(Arcane::BodyMotion2D, supported), sizeof(Arcane::BodyMotion2D::supported), alignof(decltype(Arcane::BodyMotion2D::supported)), "bool");
-        f.Type("Arcane::Detail::Physics2D::RetiredFixture", sizeof(Arcane::Detail::Physics2D::RetiredFixture), alignof(Arcane::Detail::Physics2D::RetiredFixture));
-        f.Field("handle", offsetof(Arcane::Detail::Physics2D::RetiredFixture, handle), sizeof(Arcane::Detail::Physics2D::RetiredFixture::handle), alignof(decltype(Arcane::Detail::Physics2D::RetiredFixture::handle)), "FixtureHandle");
-        f.Field("index", offsetof(Arcane::Detail::Physics2D::RetiredFixture, index), sizeof(Arcane::Detail::Physics2D::RetiredFixture::index), alignof(decltype(Arcane::Detail::Physics2D::RetiredFixture::index)), "std::uint32_t");
-        f.Type("Arcane::Detail::Physics2D::BodyRecord", Opaque(sizeof(Arcane::Detail::Physics2D::BodyRecord)), Opaque(alignof(Arcane::Detail::Physics2D::BodyRecord)));
-        f.Field("entity", offsetof(Arcane::Detail::Physics2D::BodyRecord, entity), sizeof(Arcane::Detail::Physics2D::BodyRecord::entity), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::entity)), "Arcane::Entity");
-        f.Field("guid", offsetof(Arcane::Detail::Physics2D::BodyRecord, guid), sizeof(Arcane::Detail::Physics2D::BodyRecord::guid), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::guid)), "Arcane::Guid");
-        f.Field("fixtures", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, fixtures)), Opaque(sizeof(Arcane::Detail::Physics2D::BodyRecord::fixtures)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::fixtures))), "std::vector<FixtureHandle>");
-        f.Field("retired", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, retired)), sizeof(Arcane::Detail::Physics2D::BodyRecord::retired), alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::retired)), "bool");
-        f.Field("retiredFixtures", Opaque(offsetof(Arcane::Detail::Physics2D::BodyRecord, retiredFixtures)), Opaque(sizeof(Arcane::Detail::Physics2D::BodyRecord::retiredFixtures)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::BodyRecord::retiredFixtures))), "std::vector<RetiredFixture>");
-        f.Type("Arcane::Detail::Physics2D::EventBuffers", Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers)), Opaque(alignof(Arcane::Detail::Physics2D::EventBuffers)));
-        f.Field("contactBegin", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, contactBegin)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::contactBegin)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::contactBegin))), "std::vector<Arcane::ContactBegin2D>");
-        f.Field("contactEnd", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, contactEnd)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::contactEnd)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::contactEnd))), "std::vector<Arcane::ContactEnd2D>");
-        f.Field("contactHit", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, contactHit)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::contactHit)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::contactHit))), "std::vector<Arcane::ContactHit2D>");
-        f.Field("sensorBegin", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, sensorBegin)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::sensorBegin)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::sensorBegin))), "std::vector<Arcane::SensorBegin2D>");
-        f.Field("sensorEnd", Opaque(offsetof(Arcane::Detail::Physics2D::EventBuffers, sensorEnd)), Opaque(sizeof(Arcane::Detail::Physics2D::EventBuffers::sensorEnd)), Opaque(alignof(decltype(Arcane::Detail::Physics2D::EventBuffers::sensorEnd))), "std::vector<Arcane::SensorEnd2D>");
-        Detail::AbiManifest::Access::R_PhysicsWorld2D(f);
         Detail::AbiManifest::Access::R_PhysicsSystem2D(f);
 
         return f.h;
