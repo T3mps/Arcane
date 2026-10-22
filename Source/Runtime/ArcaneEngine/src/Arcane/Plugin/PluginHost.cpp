@@ -651,8 +651,8 @@ namespace Arcane
                 // before-the-unmap clear the primary does in TeardownImage -- and,
                 // for the same reason, keyed on `base` alone, outside the range guard.
                 process.SystemFactories().ClearOwner(img.plugin->FactoryOwner());   // == image.base for a loaded image
-                if (const std::size_t hooks = UnregisterSimHooksInRange(image.base, image.size); hooks != 0)
-                    ARC_WARN("PluginHost: dropped {} sim hook(s) owned by a secondary -- hook modules must be linked by the host", hooks);
+                // The secondaries' sim-hook net is NOT here: it runs in
+                // ShutdownPluginsLive, before any ClearSystems (see there).
                 if (image.size != 0)
                 {
                     for (Runtime* rt : runtimes)
@@ -711,6 +711,7 @@ namespace Arcane
                         // on that path).
                         PluginImage failed;
                         failed.plugin = std::move(*p);
+                        DropSecondarySimHooks();   // the loaded secondaries' net, before TeardownImage's ClearSystems
                         TeardownImage(failed, /*callShutdown*/ true);
                     }
                     else   // a real load failure, not Init()-returned-false -- name the cause
@@ -740,6 +741,25 @@ namespace Arcane
             for (auto it = plugins.rbegin(); it != plugins.rend(); ++it)
                 if (it->plugin && it->plugin->VTable().Shutdown)
                     ScopedCall(*it->plugin, [&] { it->plugin->VTable().Shutdown(); });
+            DropSecondarySimHooks();
+        }
+
+        // Sim hooks (Sim/SimHook.hpp): the fallback net for a hook that points
+        // into a secondary's image. Every caller runs it BEFORE any ClearSystems
+        // (Task 8 fix round 2, the TeardownImage ruling): ClearSystems re-runs
+        // every hook's InstallSystems and would re-add the image's systems.
+        // ShutdownPluginsLive runs it on every path that later unloads or
+        // re-establishes the secondaries.
+        void DropSecondarySimHooks()
+        {
+            for (auto& img : plugins)
+            {
+                if (!img.plugin)
+                    continue;
+                const Module::ImageSpan image = img.plugin->LoadedModule().Image();
+                if (const std::size_t hooks = UnregisterSimHooksInRange(image.base, image.size); hooks != 0)
+                    ARC_WARN("PluginHost: dropped {} sim hook(s) owned by a secondary -- hook modules must be linked by the host", hooks);
+            }
         }
 
         // Re-Init each loaded plugin (load order) on the SAME mapped modules -- used to
