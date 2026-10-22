@@ -142,6 +142,13 @@ namespace Arcane
             f.Field("m_factories", Opaque(offsetof(Arcane::ProcessContext, m_factories)), Opaque(sizeof(Arcane::ProcessContext::m_factories)), Opaque(alignof(decltype(Arcane::ProcessContext::m_factories))), "SystemFactoryTable");
             f.Field("m_dedicated", Opaque(offsetof(Arcane::ProcessContext, m_dedicated)), sizeof(Arcane::ProcessContext::m_dedicated), alignof(decltype(Arcane::ProcessContext::m_dedicated)), "bool");
             f.Field("m_slotHeld", Opaque(offsetof(Arcane::ProcessContext, m_slotHeld)), sizeof(Arcane::ProcessContext::m_slotHeld), alignof(decltype(Arcane::ProcessContext::m_slotHeld)), "bool");
+            // std::mutex is library-defined state whose size differs by standard
+            // library (MSVC 80 bytes, libstdc++ 40, libc++ 64 on x64), so it hashes
+            // opaque like a container. std::weak_ptr is two pointers in all three
+            // (as m_owned's unique_ptr is one), so its own size and alignment are
+            // real. Both follow m_factories, so their offsets are opaque either way.
+            f.Field("m_jobsMutex", Opaque(offsetof(Arcane::ProcessContext, m_jobsMutex)), Opaque(sizeof(Arcane::ProcessContext::m_jobsMutex)), Opaque(alignof(decltype(Arcane::ProcessContext::m_jobsMutex))), "std::mutex");
+            f.Field("m_jobs", Opaque(offsetof(Arcane::ProcessContext, m_jobs)), sizeof(Arcane::ProcessContext::m_jobs), alignof(decltype(Arcane::ProcessContext::m_jobs)), "std::weak_ptr<Arcane::JobSystem>");
         }
 
         static constexpr void R_PhysicsWorld2D(Fnv& f) noexcept

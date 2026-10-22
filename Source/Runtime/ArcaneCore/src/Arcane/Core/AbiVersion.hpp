@@ -19,7 +19,7 @@ namespace Arcane
     // enforce all three. `arcane-abi-digest --write` (after rebuilding the tool)
     // rewrites the file and these three values; then rebuild.
     ARC_CONSTANT("ABI: compiler-derived layout digest; regenerate with arcane-abi-digest --write")
-    inline constexpr std::uint64_t kGamePluginABIDigest = 0x53f24e0378d5da47ull;
+    inline constexpr std::uint64_t kGamePluginABIDigest = 0xdfebf449b5b007e3ull;
     ARC_CONSTANT("ABI: the Input group's committed sub-digest; regenerate with arcane-abi-digest --write")
     inline constexpr std::uint64_t kGamePluginABIDigestInput = 0x63304e30bfdae997ull;
     ARC_CONSTANT("ABI: the Client group's committed sub-digest; regenerate with arcane-abi-digest --write")
