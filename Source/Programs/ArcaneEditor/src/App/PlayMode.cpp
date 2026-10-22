@@ -157,6 +157,17 @@ namespace Arcane::Editor
         const Arcane::PluginVTable* plugin = host ? host->Vtable() : nullptr;
 
         bool ok;
+#if !defined(ARC_BUILD_DIST)
+        if (m_failNextRestore)
+        {
+            // Test seam (editor.play.failnextrestore): force the failure
+            // Runtime::RestoreRegistry reports transactionally (Runtime.cpp), without
+            // calling it, so the play-time mutation stays in the registry.
+            m_failNextRestore = false;
+            ok = false;
+        }
+        else
+#endif
         if (m_usedPlugin && plugin && plugin->LoadState)
         {
             // Restore via the plugin's LoadState -- it re-establishes native resources
@@ -172,8 +183,22 @@ namespace Arcane::Editor
         }
 
         runtime.Loop().SetPaused(true);
+        if (!ok)
+        {
+            // A FAILED restore stays in Play: the registry still holds the play-time
+            // state and m_snapshot is intact, so a second Stop retries the restore, and
+            // IsPlaying() stays true so Save (DoSaveScene's Play refusal) and the
+            // plugin hot-reload Poll stay blocked instead of writing or reloading over
+            // a scene that is not the authored one. Residual: this Stop has already
+            // dropped the embedded server world and switched the primary to Standalone
+            // (the teardown above stays where it is), so a retry restores a Standalone
+            // Play. A SeparateServer session also sets m_topology = Standalone here
+            // while its child process keeps running (AfterPlayFlip stops it only on a
+            // real Play->Edit flip), so the retry's flip is what stops the child.
+            return false;
+        }
         m_mode = EditorMode::Edit;
-        return ok;
+        return true;
     }
 
     void PlaySession::TickServer(double realDt, bool primaryPaused, bool primarySingleStep)

@@ -162,6 +162,41 @@ Scan ScanDirectory(const fs::path& remoteDir)
     return scan;
 }
 
+std::vector<LiveHost> HostsForClient(const fs::path& dir, const std::string& client)
+{
+    std::vector<LiveHost> hosts;
+    if (dir.empty() || client.empty())
+        return hosts;
+    std::vector<fs::path> files;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code fileEc;
+        if (it->path().extension() == ".json" && it->is_regular_file(fileEc))
+            files.push_back(it->path());
+    }
+    std::sort(files.begin(), files.end());
+    const std::int64_t now = NowUnixMs();
+    for (const fs::path& file : files) {
+        auto desc = Arcane::Remote::ReadDescriptor(file);
+        if (!desc || desc->client != client)
+            continue;
+        LiveHost host;
+        host.hung = Arcane::Remote::IsHung(*desc, now);
+        host.descriptor = std::move(*desc);
+        host.path = file;
+        hosts.push_back(std::move(host));
+    }
+    return hosts;
+}
+
+std::vector<Arcane::Remote::Descriptor> DescriptorsForClient(const fs::path& dir, const std::string& client)
+{
+    std::vector<Arcane::Remote::Descriptor> out;
+    for (LiveHost& host : HostsForClient(dir, client))
+        out.push_back(std::move(host.descriptor));
+    return out;
+}
+
 std::optional<fs::path> ProjectRootFor(const GlobalOptions& opt, Arcane::Remote::Envelope* error)
 {
     std::error_code ec;
@@ -317,6 +352,9 @@ nlohmann::json StatusData(const Scan& scan, const GlobalOptions& opt)
             continue;
         if (opt.pid != 0 && opt.pid != d.pid)
             continue;
+        // --client NAME lists only the hosts that client launched.
+        if (opt.clientSet && d.client != opt.client)
+            continue;
         // max(0, now - heartbeat) on the scan's clock, the one IsHung used;
         // unsigned so a garbled heartbeat cannot overflow.
         std::int64_t age = 0;
@@ -336,6 +374,7 @@ nlohmann::json StatusData(const Scan& scan, const GlobalOptions& opt)
             {"project", d.project},
             {"heartbeatAgeMs", age},
             {"hung", host.hung},
+            {"client", d.client},
         });
     }
     nlohmann::json stale = nlohmann::json::array();

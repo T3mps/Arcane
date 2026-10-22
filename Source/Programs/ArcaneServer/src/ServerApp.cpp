@@ -55,7 +55,12 @@ namespace Arcane::Server
     {
         rep.exitReason = std::move(exitReason);
         if (!m_cfg.reportPath.empty() && !rep.WriteTo(m_cfg.reportPath))
+        {
             ARC_ERROR("ArcaneServer: failed to write --report to '{}'", m_cfg.reportPath);
+            // A missing report is a failed run: never exit 0 over it.
+            if (exitCode == 0)
+                return 1;
+        }
         return exitCode;
     }
 
@@ -173,9 +178,10 @@ namespace Arcane::Server
 #if !defined(ARC_BUILD_DIST)
         // Servitor P0 (Task 11): --remote arms the loopback surface, after the
         // admin console and outside it (RemoteCVarService above exists only when
-        // the console is on). A listener that cannot start leaves the server
-        // running without remote: unlike the headless runtime and editor, an
-        // open-ended server is open-ended by design. The idle exit applies only
+        // the console is on). A listener that cannot start ends the run
+        // (review round 1, Task 17): an explicit --remote that cannot come up
+        // is a startup failure, exit 2 through Finish, like the refusal below.
+        // The idle exit applies only
         // to an open-ended run (spec s4.7): a --frames N run ends by itself.
         if (m_cfg.remote && !Arcane::Remote::Arming::Allow(m_runtime->Mode(), false, true))
         {
@@ -193,7 +199,10 @@ namespace Arcane::Server
             rc.cvarContext        = Arcane::CVarContext::ServerAdmin;
             rc.projectRoot        = proj->Root();
             rc.descriptorOverride = m_cfg.remoteDescriptor;
-            rc.idleExitSeconds    = m_cfg.frames == 0 ? m_cfg.remoteIdleExitSeconds : 0u;
+            rc.client             = m_cfg.remoteClient;
+            rc.ownerPid           = Arcane::Remote::Arming::OwnerPid(m_cfg.remote, m_cfg.ownerPid);
+            rc.idleExitSeconds    = Arcane::Remote::Arming::IdleExitSeconds(m_cfg.remote, m_cfg.frames, m_cfg.remoteIdleExitSeconds);
+            rc.explicitRemote     = m_cfg.remote;   // I1: the server arms only under --remote
             rc.holdSim            = m_cfg.remote && m_cfg.frames == 0;   // AM1: an open-ended run waits for play
             rc.capabilities       = { "console", "cvar", "ecs", "logs", "play", "problems", "stats" };
             rc.problemStore       = &m_problems;   // Task 22: installed as the engine sink at the top of Run()
@@ -206,8 +215,14 @@ namespace Arcane::Server
                 return { { "main", Arcane::ToString(app->m_runtime->Mode()), &app->m_runtime->Registry() } };
             };
             m_remote = std::make_unique<Arcane::Remote::HostSession>(std::move(rc));
+            // Start logs why and that the host "runs without remote"; an
+            // explicit --remote that cannot start is a startup failure, so the
+            // server says so before the exit (final fix pass, b6 minor).
             if (!m_remote->Start())
-                m_remote.reset();   // Start logged why; the server carries on without remote
+            {
+                ARC_ERROR("ArcaneServer: --remote did not start (see above); exiting 2");
+                return Finish(rep, "remote-failed", 2);
+            }
         }
 #endif
 

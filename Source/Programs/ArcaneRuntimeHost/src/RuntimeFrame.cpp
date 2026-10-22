@@ -28,6 +28,8 @@
 #include <Arcane/Render/GpuInstrumentation.hpp>     // Arcane::GpuDeviceLostObserved (PumpAndResize)
 #include <Arcane/Render/Nri/NriDiagnostics.hpp>      // dev-only --crash-gpu N (RenderGraph)
 #include <Arcane/Render/PickEmit.hpp>                // CollectPickables (RenderGraph's --pick-probe)
+#include <Arcane/Scene/BoundsSystem.hpp>              // PresentDerivedState (the Hold branch)
+#include <Arcane/Scene/TransformSystems.hpp>
 #include <Arcane/Render/RenderLookSettings.hpp>       // render.mesh.defaultLight.* (the scene light, Live)
 #include <Arcane/Sim/SimSettings.hpp>   // ClampFrameDelta / ApplySimStepCap
 
@@ -43,6 +45,15 @@
 namespace
 {
     bool g_runtimeConsoleOpen = false;
+
+    // A held frame still presents the scene: propagate world transforms and
+    // refresh world bounds, the same pair EditModeSchedule runs outside Play.
+    // Not a sim step: no RunLoop::Advance, no frameCount, no physics.
+    void PresentDerivedState(Astra::Registry& reg)
+    {
+        Arcane::TransformPropagationSystem{}.operator()(reg);
+        Arcane::BoundsSystem{}.operator()(reg);
+    }
 }
 
 namespace
@@ -234,6 +245,7 @@ void AdvanceSim(FrameIo& io, SimPace pace)
         io.simPrev       = now;
         io.lastFrameDt   = wallDt;
         io.hostClock    += wallDt;
+        PresentDerivedState(io.runtime->Registry());
         return;
     }
 

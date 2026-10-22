@@ -389,7 +389,7 @@ int CallVerb(std::span<const std::string> rest, const GlobalOptions& opt)
     CallRequest req;
     std::string error;
     if (!ParseCallTokens(rest, req, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     const PostedCall posted = PostVerb(*FindVerb("call"), req, opt, false);
     return PrintEnvelope(posted.envelope, posted.client, opt);
 }

@@ -466,10 +466,44 @@ bool IsHelpRequest(std::span<const std::string> tokens)
     return tokens.size() == 1 && (tokens.front() == "--help" || tokens.front() == "-h");
 }
 
-int PrintUsage(const std::string& problem)
+int PrintUsage(const std::string& problem, Format format)
 {
-    Write(stderr, UsageText(problem));
+    if (format == Format::Human) {
+        Write(stderr, UsageText(problem));
+        return 2;
+    }
+    // json / ndjson: the refusal is one envelope on stdout, stderr stays empty.
+    Arcane::Remote::Envelope env = Arcane::Remote::MakeError("", "arg.invalid", problem, "servitor --help prints the usage");
+    Arcane::Remote::ClientBlock client;
+    client.exitCode = 2;
+    RenderOptions ro;
+    ro.format = format;
+    Write(stdout, Render(env, client, ro).stdoutText);
     return 2;
+}
+
+Format ScanFormat(int argc, char** argv)
+{
+    // The format a ParseArgs failure should answer in: ParseArgs returns before
+    // it assigns out.format, so read the flags again here (stopping at "--",
+    // which ends servitor's own flags). --json wins over --format, as in ParseArgs.
+    bool json = false;
+    std::optional<Format> format;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view token = argv[i];
+        if (token == "--")
+            break;
+        if (token == "--json") {
+            json = true;
+        } else if (token == "--format" && i + 1 < argc) {
+            Format parsed{};
+            if (ParseFormat(argv[i + 1], parsed, nullptr))
+                format = parsed;
+        }
+    }
+    if (json)
+        return Format::Json;
+    return format.value_or(StdoutIsTty() ? Format::Human : Format::Json);   // ParseGlobals' default
 }
 
 std::string UsageText(const std::string& problem)
@@ -486,11 +520,13 @@ std::string UsageText(const std::string& problem)
     text += "\nglobal flags: --json, --format json|human|ndjson, --timeout <s>, --project <dir>, "
             "--host editor|runtime|server, --pid <n>, --engine <root>, --world <name>, --all [editor|runtime|server], --read-only, --yes, --no-retry, "
             "--retry-on-death, --client <name>, --verbose, --version, --help (-h)\n"
-            "  --client <name> names the caller in the host's audit log (default: servitor/<version> pid <pid>)\n"
+            "  --client <name> names the caller in the host's audit log (default: servitor/<version> pid <pid>); "
+            "launch records it in the host's descriptor, status lists only that client's hosts, and quit quits "
+            "them (with --host <kind>, also that kind's host launched without --client; --pid wins)\n"
             "  --verbose prints each request's payload, including the values you pass (a cvar set's value too); "
             "the bearer token is redacted\n"
             "  --retry-on-death resends only after the host died or hung and a new host was found (servitor status)\n"
-            "  --yes confirms a Drive command sent to several hosts with --all\n";
+            "  --yes confirms a Drive command sent to several hosts with --all, or quit --client matching several\n";
     return text;
 }
 
@@ -554,10 +590,15 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
     if (client == nullptr)
         client = &local;
     client->retried = false;
+    std::string verboseLine;
     if (opt.verbose) {
         const std::string line = "servitor request: POST /remote/v1/call Authorization: Bearer " +
                                  client->token + " " + payload;
-        ARC_INFO("{}", Arcane::Remote::RedactSecrets(line, client->token));   // stderr only (R8-8)
+        verboseLine = Arcane::Remote::RedactSecrets(line, client->token);
+        // human: the engine logger's stderr sink (R8-8). json / ndjson: the
+        // line rides the envelope as a warning (below); stderr stays empty.
+        if (opt.format == Format::Human)
+            ARC_INFO("{}", verboseLine);
     }
     ExchangeResult last{};
     const auto started = std::chrono::steady_clock::now();
@@ -595,6 +636,12 @@ Printed Call(const CallRequest& req, const GlobalOptions& opt, ExchangeFn exchan
         break;
     }
     ExplainUnknownCommand(req.command, last.envelope);
+    if (!verboseLine.empty() && opt.format != Format::Human) {
+        Arcane::Remote::Error warning;
+        warning.code = "servitor.verbose";
+        warning.message = verboseLine;
+        last.envelope.warnings.push_back(std::move(warning));
+    }
     if (finalEnvelope != nullptr)
         *finalEnvelope = last.envelope;
     RenderOptions ro;
@@ -616,30 +663,30 @@ int Run(int argc, char** argv)
     std::string error;
     std::vector<std::string> tokens;
     if (!ParseArgs(argc, argv, opt, &error, &tokens))
-        return PrintUsage(error);
+        return PrintUsage(error, ScanFormat(argc, argv));
     // `servitor --help` / `-h` with no verb: the usage on stdout, exit 0 (round 4).
     if (IsHelpRequest(tokens)) {
         Write(stdout, HelpText());
         return 0;
     }
     if (tokens.empty())
-        return PrintUsage("no verb given");
+        return PrintUsage("no verb given", opt.format);
     std::size_t consumed = 0;
     const VerbRow* row = MatchVerb(tokens, &consumed);
     if (row == nullptr)
         return PrintUsage(tokens.front().starts_with("-") ? "unknown flag " + tokens.front()
-                                                          : "unknown verb " + tokens.front());
+                                                          : "unknown verb " + tokens.front(), opt.format);
     const auto rest = std::span<const std::string>(tokens).subspan(consumed);
     // Every global flag was consumed above, so a leftover "--x" is unknown
     // unless the verb's row declares it (Task 14 review carry; Task 16 rows
     // declare their flags, and launch passes everything after "--" through).
     if (const auto problem = SplitVerbTokens(*row, rest, nullptr))
-        return PrintUsage(*problem);
+        return PrintUsage(*problem, opt.format);
     if (row->args == nullptr && !rest.empty())
-        return PrintUsage(std::string(row->words) + " takes no arguments, got " + rest.front());
+        return PrintUsage(std::string(row->words) + " takes no arguments, got " + rest.front(), opt.format);
     // Rule 3: --world / --read-only on a verb that posts no call is refused, never dropped.
     if (const auto problem = UnusedGlobal(*row, opt))
-        return PrintUsage(*problem);
+        return PrintUsage(*problem, opt.format);
     if (opt.all)
         return RunFanOut(*row, rest, opt);   // spec AM2: one command to every matching live host
     if (row->local != nullptr)
@@ -647,7 +694,7 @@ int Run(int argc, char** argv)
     CallRequest req;
     req.command = row->command;
     if (row->args != nullptr && !row->args(rest, req.args, &error))
-        return PrintUsage(error);
+        return PrintUsage(error, opt.format);
     const PostedCall posted = PostVerb(*row, req, opt, false);
     return PrintEnvelope(posted.envelope, posted.client, opt);
 }
@@ -748,6 +795,11 @@ void ReadLogFile(const std::filesystem::path& path, Arcane::Remote::Envelope& en
                                         "no live host, and its log file " + shown + " could not be read",
                                         "launch the host (servitor launch editor|runtime|server)");
     };
+    // A directory (or any non-regular path) opens as an ifstream on some
+    // standard libraries and tellg() then reports a nonsense size.
+    std::error_code regularEc;
+    if (!std::filesystem::is_regular_file(path, regularEc) || regularEc)
+        return unreadable();
     std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in.is_open())
         return unreadable();

@@ -21,6 +21,9 @@
 #include "Project/StartPageModel.hpp"   // DialogStartDir / BuildStartPage (spec 2026-09-30 s8.4)
 #include "Scene/SelectionOps.hpp"
 #include "Remote/SelectionCommand.hpp"   // editor.selection.get (Servitor P0 Task 25)
+#include "Remote/ModalProbeCommand.hpp"   // editor.modal.probe (review fix round 1, Task 5)
+#include "Remote/GizmoProbeCommand.hpp"   // editor.gizmo.probe (Task 6)
+#include "Remote/PlayRestoreProbeCommand.hpp"   // editor.play.failnextrestore (Task 7)
 #include "Scene/UndoGate.hpp"   // UndoBarred: Ctrl+Z/Y share the Play barrier (spec s3.3b)
 #include "Settings/AxisColors.hpp"
 #include "Settings/EditorConsoleSettings.hpp" // editor.console.displayLineCap (the ring follows it; settings S6-41)
@@ -40,12 +43,14 @@
 #include "Input/EditorActions.hpp"
 #include "Viewport/ViewportActions.hpp"
 
+#include <array>
 #include <Arcane/AssetPipeline/CookSession.hpp>   // F2b Task 12: MainLoop's pre-loop cook gate
 #include <Arcane/Assets/Assets.hpp>      // Arcane::WritePngRgba (RenderSceneToViewport's capture block)
 #include <Arcane/Assets/ImageCompare.hpp>   // --compare (Task 9): PixelData/ImageCompareOptions/CompareImages; also pulls in ImageIo.hpp's LoadPngRgba
 #include <Arcane/Audio/AudioDevice.hpp>  // complete type for AudioSystem().Update (per-frame voice reap)
 #include <Arcane/Input/InputActionAsset.hpp>
 #include <Arcane/Base/Diagnostics.hpp>   // Diagnostics::Heartbeat -- the hang watchdog's liveness signal
+#include <exception>
 #include <fstream>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/CVarDecl.hpp>
@@ -348,8 +353,22 @@ namespace Arcane::Editor
             {
                 Arcane::AssetPipeline::CookSession cookGate;
                 cookGate.SetTextureDefaults(Arcane::Settings<Arcane::AssetPipeline::TextureMetaSettings>());   // S6-6
-                const Arcane::AssetPipeline::CookResult cookResult =
-                    cookGate.CookProject(cookProjectRoot);
+                Arcane::AssetPipeline::CookResult cookResult;
+                try
+                {
+                    cookResult = cookGate.CookProject(cookProjectRoot);
+                }
+                catch (const std::exception& ex)
+                {
+                    // A throwing cook is a failed cook: the gate below refuses.
+                    cookResult.failed = 1;
+                    ARC_ERROR("--compare '{}': the cook threw: {}", m_config.compareReference, ex.what());
+                }
+                catch (...)
+                {
+                    cookResult.failed = 1;
+                    ARC_ERROR("--compare '{}': the cook threw", m_config.compareReference);
+                }
                 if (cookResult.failed > 0)
                 {
                     ARC_ERROR("--compare '{}': {} content source(s) failed to cook -- refusing "
@@ -1552,11 +1571,15 @@ namespace Arcane::Editor
         {
             m_gizmoHovered = Arcane::GizmoAxis::None;
             // Only reached with an active drag when the entity/component
-            // genuinely vanished (deleted/deselected mid-drag) -- discard the
-            // now-meaningless transaction.
+            // genuinely vanished (deleted/deselected mid-drag) -- close the
+            // now-orphaned transaction.
             if (m_gizmoDrag.active)
             {
-                m_undo->Cancel(m_gizmoDrag.txn);
+                // Abandon, not Cancel: Cancel discards the transaction WITHOUT
+                // reverting, stranding a mid-drag pose with no undo record.
+                // Abandon commits when every target survived (the pose stays and
+                // is undoable) and restores the survivors when one is gone.
+                m_undo->Abandon(m_gizmoDrag.txn);
                 m_gizmoDrag = {};
             }
         }
@@ -1967,9 +1990,18 @@ namespace Arcane::Editor
         rc.cvarContext        = Arcane::CVarContext::Editor;
         rc.projectRoot        = projectRoot;
         rc.descriptorOverride = m_config.remoteDescriptor;
-        // The idle exit is for an abandoned open-ended headless editor only
-        // (spec s4.7); an interactive editor never ends itself.
-        rc.idleExitSeconds    = (m_config.headless && m_config.maxFrames == 0) ? m_config.remoteIdleExitSeconds : 0u;
+        rc.client             = m_config.remoteClient;
+        // The idle exit and the owner watch are for an editor a client
+        // launched (--remote, which servitor launch always passes) and left
+        // open-ended (spec s4.7). editor.remote.enable is on by default, so
+        // the editor a user opens by hand also arms this session; it never
+        // ends itself and watches no process (B7 fix round 1, C2).
+        rc.ownerPid           = Arcane::Remote::Arming::OwnerPid(m_config.remote, m_config.ownerPid);
+        rc.idleExitSeconds    = Arcane::Remote::Arming::IdleExitSeconds(m_config.remote, m_config.maxFrames, m_config.remoteIdleExitSeconds);
+        // Final fix pass (I1): only the explicit --remote marks the descriptor;
+        // the hand-opened editor's stays false, so quit --client's fallback
+        // never selects it.
+        rc.explicitRemote     = m_config.remote;
         rc.capabilities       = { "capture", "compare", "console", "cvar", "ecs", "logs", "play",
                                   "problems", "scene", "selection", "stats" };
         // Task 16 hooks (ruling F12), main thread, hookUser = this. dirty is the
@@ -2130,6 +2162,17 @@ namespace Arcane::Editor
         };
         Arcane::Editor::SetSelectionView(selectionView);
         Arcane::Editor::RegisterSelectionCommand();
+        // editor.modal.probe (Dist-stripped, test-only): arms the two competing
+        // dockspace modals so a Servitor run can witness the gate.
+        Arcane::Editor::SetModalProbeApp(this);
+        Arcane::Editor::RegisterModalProbeCommand();
+        // editor.gizmo.probe: starts a two-target gizmo drag, deletes one target,
+        // and lets the frame's else-branch abandon it.
+        Arcane::Editor::SetGizmoProbeApp(this);
+        Arcane::Editor::RegisterGizmoProbeCommand();
+        // editor.play.failnextrestore: makes the next Stop's restore fail once.
+        Arcane::Editor::SetPlayRestoreProbeApp(this);
+        Arcane::Editor::RegisterPlayRestoreProbeCommand();
     }
 #endif
 
@@ -2832,6 +2875,8 @@ namespace Arcane::Editor
         // own declaration states the split).
         if (toolbar.launchServer)
             DoLaunchServer();
+        if (toolbar.stopFailed)
+            PushPlayStopFailedModal();   // the toolbar Stop shares the menu/command failure path
         if (toolbar.problemsChipClicked)
         {
             m_panelVis.visible[static_cast<std::size_t>(Arcane::Editor::PanelId::Problems)] = true;
@@ -3066,7 +3111,14 @@ namespace Arcane::Editor
             LaunchProjectOpenRequests(startReq);
         }
         // New documents tab into the Viewport's node (captured last frame).
-        m_documents.DrawAll(m_viewportDockId);
+        // The document unsaved-changes confirm joins the one-modal gate (ModalGate.hpp):
+        // it draws only when no error / parked scene intent outranks it.
+        m_documents.DrawAll(m_viewportDockId,
+            Arcane::Editor::ModalAllowed(m_modalErrors.Front() != nullptr,
+                                         m_scene.Pending() != Arcane::Editor::SceneIntent::None,
+                                         m_documents.HasPendingConfirm(),
+                                         false) != Arcane::Editor::ModalKind::UnsavedDocument
+            && m_documents.HasPendingConfirm());
         // Input-editor spec s2.6: a saved input document pushed a republish
         // request from Save(); apply it here, at the frame boundary, whether or
         // not the document still exists (save-and-close destroys it inside
@@ -3959,15 +4011,148 @@ namespace Arcane::Editor
         m_assetModel.Select(created);
     }
 
+    void EditorApp::PushPlayStopFailedModal()
+    {
+        ARC_ERROR("Play mode could not be stopped: the edit snapshot failed to restore; the editor stays in Play");
+        m_modalErrors.Push("Stop Failed",
+                           "Play mode could not be stopped: the edit snapshot failed to restore.\n"
+                           "The editor stays in Play and nothing was saved or replaced. "
+                           "Stop again to retry the restore.");
+    }
+
+#if !defined(ARC_BUILD_DIST)
+    // editor.modal.probe's only touch points (Remote/ModalProbeCommand.cpp). The
+    // probe is the sole caller; each runs inside DrainFrame, before DrawModals.
+    bool EditorApp::ArmModalProbe()
+    {
+        m_modalErrors.Push("Probe Error", "editor.modal.probe: a queued error that must draw before the create dialog.");
+        BeginCreateAsset(Arcane::Editor::CreateAssetRequest{ Arcane::Editor::CreateAssetKind::Material });
+        if (!m_createDialog.open)
+            m_modalErrors.Pop();   // BeginCreateAsset refused: do not leave the probe error queued
+        return m_createDialog.open;
+    }
+    void EditorApp::DismissModalProbe() { m_modalErrors.Pop(); }
+    namespace
+    {
+        // A dirty document with no window: only its close confirm is under test.
+        class ProbeDirtyDocument final : public Arcane::Editor::EditorDocument
+        {
+        public:
+            const std::string& Title() const override { return m_title; }
+            Arcane::Guid AssetGuid() const override { return {}; }
+            bool Dirty() const override { return true; }
+            bool Save() override { return true; }
+            void Draw(bool&) override {}
+            void NoteMoved(const std::filesystem::path&) override {}
+        private:
+            std::string m_title = "ModalProbeDocument";
+        };
+    }
+    bool EditorApp::ArmDocumentModalProbe()
+    {
+        if (m_documents.HasPendingConfirm())
+            return false;
+        Arcane::Editor::EditorDocument* doc = m_documents.Add(std::make_unique<ProbeDirtyDocument>());
+        m_documents.RequestClose(doc);
+        return m_documents.HasPendingConfirm();
+    }
+    void EditorApp::ClearDocumentModalProbe()
+    {
+        if (Arcane::Editor::EditorDocument* doc = m_documents.PendingConfirmDoc())
+        {
+            m_documents.CancelClose();
+            m_documents.CloseForAssetRemoval(doc);
+        }
+    }
+    void EditorApp::ArmFailNextRestore() { m_play.FailNextRestoreForTesting(); }
+    Arcane::Editor::ModalKind EditorApp::ModalProbeKind() const noexcept { return m_modalDrawn; }
+
+    // editor.gizmo.probe's only touch point. Mirrors the press path of
+    // UpdateGizmoInteraction (Begin + SnapshotComponent per root + the drag
+    // fields), then deletes one target and clears the selection, so THIS
+    // frame's UpdateGizmoInteraction takes the else-branch with a live drag.
+    // Does not call Abandon or Cancel itself. False when there is no live
+    // scene root, a drag/transaction is already open, or the runtime is absent.
+    bool EditorApp::ArmGizmoAbandonProbe()
+    {
+        if (!m_runtime || !m_undo || m_gizmoDrag.active || m_undo->InTransaction() || InPlayMode())
+            return false;
+        Astra::Registry& reg = m_runtime->Registry();
+        const Astra::Entity a = Arcane::Edit::CreateEntityInScene(reg, Astra::Entity::Invalid());
+        const Astra::Entity b = Arcane::Edit::CreateEntityInScene(reg, Astra::Entity::Invalid());
+        if (!a.IsValid() || !b.IsValid())
+        {
+            std::vector<Astra::Entity> made;
+            if (a.IsValid()) made.push_back(a);
+            if (b.IsValid()) made.push_back(b);
+            if (!made.empty())
+                (void)Arcane::Edit::DeleteEntities(reg, made);
+            return false;
+        }
+        (void)Arcane::Edit::RenameEntity(reg, a, "GizmoProbeA");
+        (void)Arcane::Edit::RenameEntity(reg, b, "GizmoProbeB");
+        const Astra::ComponentDescriptor* desc = FindTransformDescriptor(reg, a);
+        Arcane::Transform* ta = reg.GetComponent<Arcane::Transform>(a);
+        Arcane::Transform* tb = reg.GetComponent<Arcane::Transform>(b);
+        if (!desc || !ta || !tb)
+        {
+            const std::array<Astra::Entity, 2> made{ a, b };
+            (void)Arcane::Edit::DeleteEntities(reg, made);
+            return false;
+        }
+        ta->position = glm::vec3(0.0f);
+        tb->position = glm::vec3(0.0f);
+
+        m_selection.Clear();
+        m_selection.AddRange(std::array<Astra::Entity, 2>{ a, b }, a);
+        m_gizmoDrag.targets.clear();
+        m_gizmoDrag.txn = m_undo->Begin("Gizmo");
+        for (Astra::Entity e : { a, b })
+        {
+            m_undo->SnapshotComponent(e, desc);
+            m_gizmoDrag.targets.push_back({ e, Arcane::DecomposeTRS(Arcane::Edit::WorldMatrix(reg, e)), 0 });
+        }
+        ta->position.x = 5.0f;
+        tb->position.x = 5.0f;
+        m_gizmoDrag.active = true;
+        m_gizmoDrag.axis   = Arcane::GizmoAxis::None;
+
+        const std::array<Astra::Entity, 1> doomed{ b };
+        (void)Arcane::Edit::DeleteEntities(reg, doomed);
+        m_selection.Clear();   // HasSelection() false: gizmoActive is false, the drag is still live
+        return true;
+    }
+#endif
+
     // Phase 15: the modals. Opened and drawn at DOCKSPACE level, outside any
     // panel window -- that is why they live here and not inside a panel draw.
     void EditorApp::DrawModals(LoopState& ls)
     {
+        // Unsaved-scene confirm's parked intent -- read once, ahead of every modal
+        // below, so the gate sees it. Every branch reads this same snapshot (a
+        // TakePending() mid-frame cannot change what either reads).
+        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
+
+        // ONE dockspace-level modal per frame (ModalGate.hpp): errors first, then
+        // the unsaved-scene confirm, then the create dialog. Every modal here
+        // re-arms itself the same way ("if (!IsPopupOpen(title)) OpenPopup(title)")
+        // and ImGui allows exactly ONE popup at a given stack level: two such
+        // modals up at once close each other every frame (OpenPopupEx ->
+        // ClosePopupToLevel(0)), which leaves both permanently `Appearing` and,
+        // under AlwaysAutoResize, permanently INVISIBLE. A loser's state is left
+        // untouched, so it draws again once the modals above it are clear.
+        const Arcane::Editor::ModalKind allowed = Arcane::Editor::ModalAllowed(
+            m_modalErrors.Front() != nullptr,
+            pending != Arcane::Editor::SceneIntent::None,
+            m_documents.HasPendingConfirm(),
+            m_createDialog.open);
+
         // ONE error modal, FIFO off the queue (architecture pass sec 7). The title
         // is per-error so it stays honest about which action failed; Pop advances
         // to the next queued error on the following frame.
-        if (const Arcane::Editor::ModalError* err = m_modalErrors.Front())
+        if (allowed == Arcane::Editor::ModalKind::Error)
         {
+            const Arcane::Editor::ModalError* err = m_modalErrors.Front();
             if (!ImGui::IsPopupOpen(err->title.c_str()))
                 ImGui::OpenPopup(err->title.c_str());
             if (ImGui::BeginPopupModal(err->title.c_str(), nullptr,
@@ -3987,38 +4172,16 @@ namespace Arcane::Editor
             }
         }
 
-        // Unsaved-scene confirm's parked intent -- read here, ahead of the
-        // create dialog below, so the create dialog's starvation gate can see
-        // it too. Same snapshot is reused at the "Unsaved Scene" block further
-        // down (a TakePending() mid-frame cannot change what either reads).
-        const Arcane::Editor::SceneIntent pending = m_scene.Pending();
-
         // The unified create dialog (asset-manager Plan 1 Task 12). A
         // dockspace-level modal like the two around it -- opened by the ONE
         // entry (BeginCreateAsset), dispatched by the ONE dispatcher
         // (ConsumeCreateResult), which is the whole of spec s7's "no creation
-        // path may bypass CreateAssetRequest".
-        //
-        // GATED ON AN EMPTY ERROR QUEUE **AND** ON NO PARKED SCENE INTENT --
-        // both load-bearing, not taste. Every modal in this function re-arms
-        // itself the same way ("if (!IsPopupOpen(title)) OpenPopup(title)"),
-        // and ImGui allows exactly ONE popup at a given stack level: two such
-        // modals up at once close each other every frame (OpenPopupEx ->
-        // ClosePopupToLevel(0)), which makes both permanently `Appearing` and
-        // therefore -- under AlwaysAutoResize, which hides an appearing window
-        // for one frame while it fits itself -- permanently INVISIBLE.
-        // Observed live: a queued "Open Project Failed" and this dialog
-        // starved each other to a blank screen. The "Unsaved Scene" modal just
-        // below has the identical re-arm shape and is reachable while the
-        // create dialog is open -- the OS window-close button reaches
-        // SceneSession and parks an Exit intent regardless of any ImGui modal
-        // on screen -- so it must be covered by the same gate or the two
-        // starve each other instead. Both a queued error and a parked scene
-        // intent are more urgent than a create dialog and must be resolved
-        // first, so the create dialog waits its turn either way (its state is
-        // untouched, so it draws again once both are clear).
-        if (m_createDialog.open && !m_modalErrors.Front() &&
-            pending == Arcane::Editor::SceneIntent::None)
+        // path may bypass CreateAssetRequest". It waits behind a queued error and
+        // a parked scene intent (the gate above): observed live, a queued "Open
+        // Project Failed" and this dialog starved each other to a blank screen,
+        // and the OS close button parks an Exit intent regardless of any ImGui
+        // modal on screen. Its state is untouched while it waits.
+        if (allowed == Arcane::Editor::ModalKind::CreateAsset)
         {
             if (const Arcane::Project* createProj = m_runtime->CurrentProject())
             {
@@ -4044,10 +4207,18 @@ namespace Arcane::Editor
         // reads that same snapshot, so a TakePending() mid-block cannot change
         // what the rest of the frame's UI thinks is pending.
         const bool isLaunch = (pending == Arcane::Editor::SceneIntent::LaunchStandalone);
-        if (pending != Arcane::Editor::SceneIntent::None &&
-            !ImGui::IsPopupOpen("Unsaved Scene"))
-            ImGui::OpenPopup("Unsaved Scene");
-        if (ImGui::BeginPopupModal("Unsaved Scene", nullptr,
+        if (allowed == Arcane::Editor::ModalKind::UnsavedScene)
+        {
+            if (!ImGui::IsPopupOpen("Unsaved Scene"))
+                ImGui::OpenPopup("Unsaved Scene");
+        }
+        // Drawn only when this modal won the gate, so a parked intent cannot
+        // re-arm while an error is up. The pending == None arm keeps an
+        // already-open popup reaching its CloseCurrentPopup below (the intent
+        // was taken outside it).
+        if ((allowed == Arcane::Editor::ModalKind::UnsavedScene ||
+             pending == Arcane::Editor::SceneIntent::None) &&
+            ImGui::BeginPopupModal("Unsaved Scene", nullptr,
                                    ImGuiWindowFlags_AlwaysAutoResize))
         {
             if (pending == Arcane::Editor::SceneIntent::None)
@@ -4081,30 +4252,41 @@ namespace Arcane::Editor
                     // LaunchStandalone only reaches here already saved-or-dirty,
                     // never mid-Play in a way DoLaunchStandalone itself needs.
                     const bool wasPlaying = InPlayMode();
-                    if (wasPlaying)
-                        m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
-                    AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
-                    m_serverProcess.Stop();   // the session's other half, unconditionally; no-op otherwise
-                    if (m_scene.Path().empty())
+                    const bool stopFailed =
+                        wasPlaying && !m_play.Stop(m_runtime->Core(), m_plugin ? &*m_plugin : nullptr);
+                    if (stopFailed)
                     {
-                        // Never saved: this needs a filename first. The intent
-                        // stays parked and this popup stays up until the dialog
-                        // resolves, so cancelling the dialog cancels only the
-                        // save, not the action behind it.
-                        ShowSceneSaveDialog();
-                    }
-                    else if (DoSaveScene(m_scene.Path()))
-                    {
-                        ls.sceneAction = m_scene.TakePending();
-                        ImGui::CloseCurrentPopup();
+                        // The restore failed and Play stays: the registry is NOT the
+                        // authored scene, so saving now would write play-time state.
+                        // Abort the save and the action behind it: the intent stays
+                        // parked, and the error modal wins the gate next frame.
+                        PushPlayStopFailedModal();
                     }
                     else
                     {
-                        // The save failed (m_modalErrors carries why). Drop the
-                        // action rather than proceed -- proceeding would discard
-                        // exactly the work the save was meant to preserve.
-                        m_scene.ClearPending();
-                        ImGui::CloseCurrentPopup();
+                        AfterPlayFlip(wasPlaying);   // the one flip rule (EditorApp.hpp)
+                        m_serverProcess.Stop();   // the session's other half, unconditionally; no-op otherwise
+                        if (m_scene.Path().empty())
+                        {
+                            // Never saved: this needs a filename first. The intent
+                            // stays parked and this popup stays up until the dialog
+                            // resolves, so cancelling the dialog cancels only the
+                            // save, not the action behind it.
+                            ShowSceneSaveDialog();
+                        }
+                        else if (DoSaveScene(m_scene.Path()))
+                        {
+                            ls.sceneAction = m_scene.TakePending();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        else
+                        {
+                            // The save failed (m_modalErrors carries why). Drop the
+                            // action rather than proceed -- proceeding would discard
+                            // exactly the work the save was meant to preserve.
+                            m_scene.ClearPending();
+                            ImGui::CloseCurrentPopup();
+                        }
                     }
                 }
                 // Discard: hidden for a launch -- the standalone runtime reads
@@ -4129,6 +4311,10 @@ namespace Arcane::Editor
             }
             ImGui::EndPopup();
         }
+
+#if !defined(ARC_BUILD_DIST)
+        m_modalDrawn = allowed;   // editor.modal.probe op=drawn reads the previous frame's winner
+#endif
     }
 
     // Phase 16: the Viewport panel itself. It samples the texture the render
@@ -4940,7 +5126,10 @@ namespace Arcane::Editor
             // Clear in the same EndFrame, before any undo can run: no command's
             // destructor calls module code (spec s3.3f, verdict CONFIRMED).
             const std::uint32_t generation = m_plugin->Generation();
-            m_plugin->Poll();
+            // Not during Play: a hot reload would swap the module over a registry that
+            // still holds play-time state and the open edit snapshot (a failed Stop
+            // leaves Play sticky). StartModuleRebuild already refuses in Play.
+            if (!InPlayMode()) m_plugin->Poll();
             if (m_undo && m_plugin->Generation() != generation)
                 Arcane::Editor::ClearHistoryForModuleReload(*m_undo, m_scene);
         }

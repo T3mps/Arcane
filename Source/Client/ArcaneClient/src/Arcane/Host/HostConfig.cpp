@@ -30,7 +30,7 @@ namespace Arcane
             "crash-gpu", "hang-main", "frames", "report", "compare", "settle", "screenshot",
             "settle-timeout", "probe", "max-diff-pixels", "max-diff-pixel-ratio",
             "fixed-dt", "fixed-time", "pick-probe", "window-size",
-            "remote-descriptor", "remote-idle-exit",
+            "remote-descriptor", "remote-idle-exit", "client", "owner-pid",
         };
         constexpr std::string_view kStripBareFlags[] = { "headless", "bless", "remote" };
 
@@ -65,7 +65,8 @@ namespace Arcane
                     continue;
                 arg.remove_prefix(2);
                 const std::string_view name = arg.substr(0, arg.find('='));
-                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit")
+                if (name == "remote" || name == "remote-descriptor" || name == "remote-idle-exit" || name == "client"
+                    || name == "owner-pid")
                     return true;
             }
             return false;
@@ -237,6 +238,10 @@ namespace Arcane
         cli.Option("remote-idle-exit", std::to_string(HostConfig{}.remoteIdleExitSeconds),
                                       "DEV: with --remote, exit after this many seconds with no remote "
                                       "request (0 = never)");
+        cli.Option("client", "", "DEV: with --remote, the caller name recorded in the attach descriptor "
+                                 "(servitor launch --client NAME; empty = unnamed)");
+        cli.Option("owner-pid", "0", "DEV: with --remote, exit when this process id is no longer running "
+                                     "(0 = watch none; opt-in, never defaulted)");
 #endif
 
         const Cli::Result r = cli.Parse(argc, argv);
@@ -336,6 +341,21 @@ namespace Arcane
         {
             std::fprintf(stderr, "error: --remote-descriptor wants a path (an empty value or another "
                                  "flag is not a descriptor path)\n");
+            return { std::nullopt, 2 };
+        }
+        cfg.remoteClient     = r.Get("client");
+        // M2 (B7 fix round 1): Cli takes the NEXT token as the value even when
+        // it is another flag (--client --headless would swallow --headless).
+        if (r.Supplied("client") && (cfg.remoteClient.empty() || cfg.remoteClient.starts_with("--")))
+        {
+            std::fprintf(stderr, "error: --client wants a caller name (an empty value or another "
+                                 "flag is not a name)\n");
+            return { std::nullopt, 2 };
+        }
+        if (r.Supplied("owner-pid") && !ParseIdleExitSeconds(r.Get("owner-pid"), cfg.ownerPid))
+        {
+            std::fprintf(stderr, "error: --owner-pid wants a process id (a whole number, 0 = none), "
+                                 "got '%s'\n", r.Get("owner-pid").c_str());
             return { std::nullopt, 2 };
         }
         cfg.remoteIdleExitSupplied = r.Supplied("remote-idle-exit");

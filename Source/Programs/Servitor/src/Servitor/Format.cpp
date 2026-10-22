@@ -117,6 +117,10 @@ Printed Render(const Arcane::Remote::Envelope& env, const Arcane::Remote::Client
             p = RenderHuman(env);
             break;
     }
+    // json and ndjson carry every error and warning inside the envelope on
+    // stdout; only the human format writes diagnostics to stderr.
+    if (opt.format != Format::Human)
+        p.stderrText.clear();
     p.stdoutText = Arcane::Remote::RedactSecrets(p.stdoutText, client.token);
     p.stderrText = Arcane::Remote::RedactSecrets(p.stderrText, client.token);
     return p;

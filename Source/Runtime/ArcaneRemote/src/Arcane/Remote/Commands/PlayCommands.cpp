@@ -239,10 +239,14 @@ CommandResult PlayStop(const Call& call, void* /*user*/)
 
     if (s.hooks.editor) {
         // PlaySession::Stop: a no-op success when already in Edit.
-        if (!s.hooks.editorStop(s.hooks.editorUser))
+        if (!s.hooks.editorStop(s.hooks.editorUser)) {
+            // The refused Stop paused the loop and stays in Play, so a pending
+            // step would never get its ticks: finish it now, not at client timeout.
+            FinishSteps(StepsStopped("play.stop failed to restore; the editor is paused in Play"), JobState::Failed);
             return Answer(MakeError(call.command, "play.refused",
                                     "the editor could not restore the edit snapshot on Stop",
                                     "read servitor problems and servitor logs"));
+        }
     } else {
         s.hooks.gate->SetRunning(false);
         s.hooks.gate->SetPaused(true);
