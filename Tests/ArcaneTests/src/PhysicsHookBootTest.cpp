@@ -32,6 +32,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <set>
 #include <regex>
 #include <sstream>
 #include <tuple>
@@ -285,39 +286,72 @@ TEST_CASE("Engine and Render and Client and Editor and Server include no physics
     const std::vector<std::string> banned = {
         "Physics2DDetail.hpp", "Physics2DHandles.hpp", "PhysicsSystem.hpp",
         "PhysicsDebugGeometry.hpp", "Manifold2D/" };
-    // ArcaneEngine reaches no Physics2D header at all (fix round 1: GameModule.hpp ->
-    // AbiManifestGame.hpp -> AbiManifestEngine.hpp used to include five of them).
-    const std::vector<std::string> bannedInEngine = {
-        "Arcane/Physics2D.hpp", "Physics2DFwd.hpp", "Physics2DWorld.hpp", "PhysicsEvents2D.hpp" };
+    // No tree reaches the Physics2D module's public headers, directly or through
+    // a chain (Physics2DFwd.hpp, the solver-free forward header, is allowed).
+    const std::vector<std::string> bannedTransitive = {
+        "Arcane/Physics2D.hpp", "Physics2DWorld.hpp", "PhysicsEvents2D.hpp" };
     // Only #include lines count, so a comment naming a header (PluginABI.hpp's
     // changelog) needs no exemption.
     const std::regex includeLine(R"(^\s*#\s*include\b)");
+    // Transitive (final fix I1): every repo-owned header an #include reaches is
+    // scanned too, so ServerApp.cpp -> Physics2DWorld.hpp -> Physics2DHandles.hpp
+    // -> Manifold2D/ cannot hide behind one hop. Headers are indexed by their path
+    // under a src/ folder, the form <Arcane/...> includes use.
+    std::map<std::string, std::filesystem::path> headerIndex;
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(root / "Source"))
+    {
+        if (!entry.is_regular_file() || entry.path().extension() != ".hpp") continue;
+        const std::string full = entry.path().generic_string();
+        const auto at = full.find("/src/");
+        if (at != std::string::npos) headerIndex.emplace(full.substr(at + 5), entry.path());
+    }
+    const std::regex includeTarget(R"(^\s*#\s*include\s*[<"]([^>"]+)[>"])");
     int scanned = 0;
     for (const auto& dir : dirs)
     {
         REQUIRE(std::filesystem::exists(root / dir));
-        const bool engine = dir == "Source/Runtime/ArcaneEngine";
+        std::set<std::filesystem::path> seen;
+        std::vector<std::filesystem::path> work;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(root / dir))
         {
             if (!entry.is_regular_file()) continue;
             const auto ext = entry.path().extension();
             if (ext != ".hpp" && ext != ".cpp") continue;
+            if (seen.insert(entry.path()).second) work.push_back(entry.path());
+        }
+        while (!work.empty())
+        {
+            const auto file = work.back();
+            work.pop_back();
             ++scanned;
-            std::istringstream text(Slurp(entry.path()));
+            std::istringstream text(Slurp(file));
             for (std::string line; std::getline(text, line);)
             {
                 if (!std::regex_search(line, includeLine)) continue;
                 for (const auto& ban : banned)
                 {
-                    INFO(entry.path().string() << " includes " << ban);
+                    INFO(dir << ": " << file.string() << " includes " << ban);
                     CHECK(line.find(ban) == std::string::npos);
                 }
-                if (!engine) continue;
-                for (const auto& ban : bannedInEngine)
+                for (const auto& ban : bannedTransitive)
                 {
-                    INFO(entry.path().string() << " includes " << ban);
+                    INFO(dir << ": " << file.string() << " includes " << ban);
                     CHECK(line.find(ban) == std::string::npos);
                 }
+                std::smatch m;
+                if (!std::regex_search(line, m, includeTarget)) continue;
+                const std::string target = m[1].str();
+                std::filesystem::path next;
+                const auto it = headerIndex.find(target);
+                if (it != headerIndex.end()) next = it->second;
+                else if (std::filesystem::exists(file.parent_path() / target)) next = file.parent_path() / target;
+                else continue; // third party or system header
+                // The game-side ABI digest headers reach the Physics2D group only
+                // through a __has_include a game build satisfies and the Engine,
+                // Render, Client, Editor and Server builds do not (no include dir).
+                const std::string leaf = next.filename().string();
+                if (leaf == "AbiManifestGame.hpp" || leaf == "AbiManifestPhysics2D.hpp") continue;
+                if (seen.insert(next).second) work.push_back(next);
             }
         }
     }
@@ -326,6 +360,9 @@ TEST_CASE("Engine and Render and Client and Editor and Server include no physics
     // EngineResourceTypes.cpp is in the walk above; ProjectHost.hpp names a Scene header only.
     CHECK(Slurp(root / "Source/Runtime/ArcaneEngine/src/Arcane/Project/ProjectHost.hpp")
               .find("PhysicsComponents.hpp") != std::string::npos);
+
+    // std::byte needs <cstddef> (final review M7; the header is game-facing).
+    CHECK(Slurp(root / "Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsComponents.hpp").find("#include <cstddef>") != std::string::npos);
 
     // Runtime.cpp names no 2D physics type at all (the hook owns them).
     const std::string runtimeCpp = Slurp(root / "Source/Runtime/ArcaneEngine/src/Arcane/Base/Runtime.cpp");

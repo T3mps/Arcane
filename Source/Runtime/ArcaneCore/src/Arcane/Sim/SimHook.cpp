@@ -26,7 +26,8 @@ namespace Arcane
             return a.order == b.order && a.Prewarm == b.Prewarm && a.RegisterComponents == b.RegisterComponents
                 && a.InstallSystems == b.InstallSystems && a.FrameBegin == b.FrameBegin
                 && a.EnsureWorld == b.EnsureWorld && a.EditPass == b.EditPass
-                && a.ResetWorld == b.ResetWorld && a.ReplaceFixedRate == b.ReplaceFixedRate;
+                && a.ResetWorld == b.ResetWorld && a.ReplaceFixedRate == b.ReplaceFixedRate
+                && a.HasWorld == b.HasWorld;
         }
 
         template <class Fn>
@@ -42,7 +43,8 @@ namespace Arcane
             return InRange(h.Prewarm, lo, hi) || InRange(h.RegisterComponents, lo, hi)
                 || InRange(h.InstallSystems, lo, hi) || InRange(h.FrameBegin, lo, hi)
                 || InRange(h.EnsureWorld, lo, hi) || InRange(h.EditPass, lo, hi)
-                || InRange(h.ResetWorld, lo, hi) || InRange(h.ReplaceFixedRate, lo, hi);
+                || InRange(h.ResetWorld, lo, hi) || InRange(h.ReplaceFixedRate, lo, hi)
+                || InRange(h.HasWorld, lo, hi);
         }
     }
 

@@ -96,6 +96,11 @@ namespace Arcane
             std::ignore = fixed.AddSystem<PhysicsSystem2D>(fixedDt, /*stepWorld*/ true);
         }
 
+        bool HasWorld(const Astra::Registry& reg) noexcept
+        {
+            return reg.GetResource<PhysicsWorld2D>() != nullptr;
+        }
+
         // RAII: the hook leaves with this image. A host links this module, so the
         // registration lands before ProcessContext::Create seals the list; a
         // plugin-loaded copy maps after the seal and is refused (SimHook.hpp).
@@ -117,6 +122,7 @@ namespace Arcane
                 hook.EditPass = &EditPass;
                 hook.ResetWorld = &ResetWorld;
                 hook.ReplaceFixedRate = &ReplaceFixedRate;
+                hook.HasWorld = &HasWorld;
                 registered = RegisterSimHook(hook);
             }
             ~Physics2DSimHookRegistrar()

@@ -40,6 +40,9 @@ namespace Arcane
         void (*EditPass)(Astra::Registry&, float fixedDt) noexcept = nullptr;
         void (*ResetWorld)(Astra::Registry&) noexcept = nullptr;
         void (*ReplaceFixedRate)(Astra::SystemScheduler& fixed, float fixedDt) noexcept = nullptr;
+        // True when this hook's world resource is live in `reg`. Lets a host that
+        // links no solver header (ArcaneServer's witness) ask without naming the type.
+        bool (*HasWorld)(const Astra::Registry&) noexcept = nullptr;
     };
 
     // Inserts in ascending `order`; equal orders keep registration order. After
