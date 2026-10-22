@@ -1,5 +1,6 @@
 #include <Arcane/Scene/PhysicsQuery.hpp>
 #include <Arcane/Base/Log.hpp>
+#include <Arcane/Sim/SimHook.hpp>   // SimHooksSealed: the query slot shares the hook seal
 
 namespace Arcane
 {
@@ -12,6 +13,13 @@ namespace Arcane
 
     bool SetPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept
     {
+        // The 2D query module is a sim hook module: host-linked, registered
+        // before ProcessContext::Create seals the hooks (Sim/SimHook.hpp).
+        if (SimHooksSealed())
+        {
+            ARC_ERROR("SetPhysicsQueryFns2D: refused -- physics modules must be linked by the host, not loaded through a plugin");
+            return false;
+        }
         const bool empty = g_debugFill2D == nullptr && g_silhouetteFill2D == nullptr;
         if (!empty && (g_debugFill2D != debug || g_silhouetteFill2D != silhouettes))
         {
@@ -20,6 +28,15 @@ namespace Arcane
         }
         g_debugFill2D = debug;
         g_silhouetteFill2D = silhouettes;
+        return true;
+    }
+
+    bool ClearPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept
+    {
+        if (g_debugFill2D != debug || g_silhouetteFill2D != silhouettes)
+            return false;
+        g_debugFill2D = nullptr;
+        g_silhouetteFill2D = nullptr;
         return true;
     }
 

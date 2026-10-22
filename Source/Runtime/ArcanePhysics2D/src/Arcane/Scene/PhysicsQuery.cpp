@@ -168,14 +168,24 @@ namespace Arcane
             });
         }
 
+        // RAII, the SimHook registrar's shape: Scene holds these pointers into
+        // this image, so they leave with it. After the sim-hook seal (a
+        // plugin-loaded copy of this module) SetPhysicsQueryFns2D refuses.
         struct PhysicsQueryRegistrar2D
         {
+            bool registered = false;
             PhysicsQueryRegistrar2D()
             {
-                // The result is dropped on purpose: the "a second 2D query
-                // registration is refused" test pins the refusal.
-                (void)SetPhysicsQueryFns2D(&FillDebug, &FillSilhouettes);
+                // The "a second 2D query registration is refused" test pins the refusal.
+                registered = SetPhysicsQueryFns2D(&FillDebug, &FillSilhouettes);
             }
+            ~PhysicsQueryRegistrar2D()
+            {
+                if (registered)
+                    (void)ClearPhysicsQueryFns2D(&FillDebug, &FillSilhouettes);
+            }
+            PhysicsQueryRegistrar2D(const PhysicsQueryRegistrar2D&) = delete;
+            PhysicsQueryRegistrar2D& operator=(const PhysicsQueryRegistrar2D&) = delete;
         } g_physicsQueryRegistrar2D;
     }
 }

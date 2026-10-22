@@ -2403,9 +2403,11 @@ abi_digest_fixture("AbiDigestNoExport", { "_CRT_SECURE_NO_WARNINGS" })
 
 group "Tests/Fixtures"
 project "AbiDigestChild"
-    -- Linked, not left to the fixture DLLs: a module that is only loaded through a plugin
-    -- unloads with it, and its SimHook would dangle in ArcaneCore.
-    arc_module_consumer(engine_modules, { "ArcaneEngine", "ArcanePhysics2D" })
+    -- ArcanePhysics2D is STAGED beside the child, not linked (3D-readiness Plan A
+    -- Task 8 fix round 1): the --sim-hook mode loads a game module that imports it,
+    -- so it maps after ProcessContext::Create sealed the sim hooks -- the
+    -- [physics][hook] witness that a plugin-loaded hook module is refused.
+    arc_module_consumer(engine_modules, { "ArcaneEngine" }, { stage = { "ArcaneEngine", "ArcanePhysics2D" } })
     location "Tests/Fixtures/AbiDigestChild"
     kind "ConsoleApp"
     language "C++"

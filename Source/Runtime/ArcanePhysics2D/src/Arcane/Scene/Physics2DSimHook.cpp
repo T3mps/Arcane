@@ -96,13 +96,18 @@ namespace Arcane
             std::ignore = fixed.AddSystem<PhysicsSystem2D>(fixedDt, /*stepWorld*/ true);
         }
 
+        // RAII: the hook leaves with this image. A host links this module, so the
+        // registration lands before ProcessContext::Create seals the list; a
+        // plugin-loaded copy maps after the seal and is refused (SimHook.hpp).
         struct Physics2DSimHookRegistrar
         {
+            SimHook hook;
+            bool registered = false;
+
             Physics2DSimHookRegistrar()
             {
                 if (HookDisabledForTest())
                     return;
-                SimHook hook;
                 hook.order = 100;   // D5's 3D hook takes 200
                 hook.Prewarm = &Prewarm;
                 hook.RegisterComponents = &RegisterComponents;
@@ -112,8 +117,15 @@ namespace Arcane
                 hook.EditPass = &EditPass;
                 hook.ResetWorld = &ResetWorld;
                 hook.ReplaceFixedRate = &ReplaceFixedRate;
-                RegisterSimHook(hook);
+                registered = RegisterSimHook(hook);
             }
+            ~Physics2DSimHookRegistrar()
+            {
+                if (registered)
+                    (void)UnregisterSimHook(hook);
+            }
+            Physics2DSimHookRegistrar(const Physics2DSimHookRegistrar&) = delete;
+            Physics2DSimHookRegistrar& operator=(const Physics2DSimHookRegistrar&) = delete;
         } g_physics2DSimHookRegistrar;
     }
 }

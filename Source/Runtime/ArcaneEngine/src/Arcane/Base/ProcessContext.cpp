@@ -33,6 +33,10 @@ namespace Arcane
         // Sim hooks claim their resource types first (the 2D physics world), the same defence.
         for (const SimHook& hook : SimHooks())
             if (hook.Prewarm) hook.Prewarm();
+        // Hook modules are host-resident: every one the host links registered at
+        // image load, before this point. One that a game plugin imports maps later
+        // and is refused from here on (Sim/SimHook.hpp).
+        SealSimHooks();
         // With the shared context installed here and nowhere else yet, Core claims
         // first-registrar of every engine RESOURCE type (see EngineResourceTypes.hpp
         // for why that matters and why it is defence, not a fix).

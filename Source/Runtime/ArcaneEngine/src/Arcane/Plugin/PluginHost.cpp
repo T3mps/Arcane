@@ -9,6 +9,7 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/CVarConfig.hpp>
+#include <Arcane/Core/ModuleAttach.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
 #include <Arcane/Config/PlayerSettings.hpp>
 #include <Arcane/Platform/Paths.hpp>   // Paths::TempDir -- where the versioned plugin images are staged (settings spec s11.0)
@@ -16,6 +17,7 @@
 #include <Arcane/Plugin/PluginSettings.hpp>
 #include <Arcane/Plugin/SystemFactory.hpp>
 #include <Arcane/Sim/NetDriver.hpp>
+#include <Arcane/Sim/SimHook.hpp>
 
 #include <Astra/Serialization/BinaryReader.hpp>
 #include <Astra/Serialization/BinaryWriter.hpp>
@@ -372,6 +374,20 @@ namespace Arcane
                     if (dropped != 0)
                         ARC_TRACE("plugin: disowned {} registration(s) of a dependency image '{}'",
                                   dropped, dep.pin.Path().generic_string());
+                    // Sim hooks: a hook module a game imports maps after the seal and
+                    // is refused (Sim/SimHook.hpp); this net catches any hook that
+                    // still points into the dependency before the pin goes.
+                    // An ENGINE module a game imports registered a module-attach
+                    // callback at image load (ARC_MODULE); every later Runtime
+                    // constructor calls AttachAllModules, so it leaves with the image.
+                    const std::size_t attaches = UnregisterModuleAttachInRange(dep.image.base, dep.image.size);
+                    if (attaches != 0)
+                        ARC_TRACE("plugin: dropped {} module-attach callback(s) of a dependency image '{}'",
+                                  attaches, dep.pin.Path().generic_string());
+                    const std::size_t hooks = UnregisterSimHooksInRange(dep.image.base, dep.image.size);
+                    if (hooks != 0)
+                        ARC_WARN("plugin: dropped {} sim hook(s) of a dependency image '{}' -- hook modules must be linked by the host",
+                                 hooks, dep.pin.Path().generic_string());
                 }
             }
             dependencies.clear();
@@ -532,6 +548,15 @@ namespace Arcane
             const PluginVTable& vt = img.plugin->VTable();
             if (callShutdown && vt.Shutdown)
                 ScopedCall(*img.plugin, [&] { vt.Shutdown(); });
+            // Sim hooks (Sim/SimHook.hpp): the fallback net for a hook that points
+            // into this image. BEFORE the ClearSystems below, which re-runs every
+            // hook's InstallSystems and would re-add the dying image's systems.
+            {
+                const Module::ImageSpan span = img.plugin->LoadedModule().Image();
+                const std::size_t hooks = UnregisterSimHooksInRange(span.base, span.size);
+                if (hooks != 0)
+                    ARC_WARN("PluginHost: dropped {} sim hook(s) owned by the unloading module -- hook modules must be linked by the host", hooks);
+            }
             // Drop plugin-created audio handles before clearing systems/registry, the
             // same window in which we tear down plugin-owned ECS state. The 2026-06-26
             // host refactor unified all teardown paths (unload, init-failure, reload-of-
@@ -626,6 +651,8 @@ namespace Arcane
                 // before-the-unmap clear the primary does in TeardownImage -- and,
                 // for the same reason, keyed on `base` alone, outside the range guard.
                 process.SystemFactories().ClearOwner(img.plugin->FactoryOwner());   // == image.base for a loaded image
+                if (const std::size_t hooks = UnregisterSimHooksInRange(image.base, image.size); hooks != 0)
+                    ARC_WARN("PluginHost: dropped {} sim hook(s) owned by a secondary -- hook modules must be linked by the host", hooks);
                 if (image.size != 0)
                 {
                     for (Runtime* rt : runtimes)

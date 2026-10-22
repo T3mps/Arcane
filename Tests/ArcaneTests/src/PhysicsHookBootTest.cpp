@@ -5,11 +5,15 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Helpers/ConstantScan.hpp"
+#include "Helpers/ModuleNames.hpp"
 #include "Helpers/PhysicsV1Baseline.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Platform/Platform.hpp>   // ExecutableFileName
+#include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8
+#include <Arcane/Plugin/Module.hpp>       // MappedModules: the ArcaneTests image span
+#include <Arcane/Scene/PhysicsQuery.hpp>
 #include <Arcane/Scene/Components.hpp>
 #include <Arcane/Scene/Physics2DWorld.hpp>
 #include <Arcane/Scene/PhysicsComponents.hpp>
@@ -23,8 +27,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <tuple>
@@ -61,13 +67,64 @@ namespace
             || !e.sensorBegin.empty() || !e.sensorEnd.empty();
     }
 
-    // Restores the registered hooks on scope exit (a REQUIRE may throw).
+    // Restores the registered hooks and the seal on scope exit (a REQUIRE may throw).
     struct HookRestore
     {
         std::vector<Arcane::SimHook> saved;
-        HookRestore() { const auto h = Arcane::SimHooks(); saved.assign(h.begin(), h.end()); }
-        ~HookRestore() { Arcane::ReplaceSimHooksForTest(saved); }
+        bool sealed = false;
+        HookRestore()
+        {
+            const auto h = Arcane::SimHooks();
+            saved.assign(h.begin(), h.end());
+            sealed = Arcane::SimHooksSealed();
+        }
+        ~HookRestore()
+        {
+            Arcane::ReplaceSimHooksForTest(saved);
+            (void)Arcane::SetSimHooksSealedForTest(sealed);
+        }
     };
+
+    void NoopPrewarm() noexcept {}
+
+    // The child (AbiDigestChild --sim-hook) links ArcaneEngine only, with
+    // ArcanePhysics2D staged beside it. Returns its exit code and key=value lines.
+    struct SimHookChildRun
+    {
+        int exitCode = -1;
+        std::string output;
+        std::map<std::string, std::string> fields;
+    };
+
+    SimHookChildRun RunSimHookChild(const std::string& module)
+    {
+        SimHookChildRun run;
+        const std::filesystem::path exeDir = std::filesystem::path(Arcane::ExecutablePathUtf8()).parent_path();
+#if defined(_WIN32)
+        const std::filesystem::path child = exeDir.parent_path() / "AbiDigestChild" / "AbiDigestChild.exe";
+        const std::string line = "\"\"" + child.string() + "\" --sim-hook \"" + module + "\" 2>NUL\"";
+        FILE* pipe = _popen(line.c_str(), "r");
+#else
+        const std::filesystem::path child = exeDir.parent_path() / "AbiDigestChild" / "AbiDigestChild";
+        const std::string line = "'" + child.string() + "' --sim-hook '" + module + "' 2>/dev/null";
+        FILE* pipe = popen(line.c_str(), "r");
+#endif
+        if (!pipe) return run;
+        char buf[256];
+        while (std::fgets(buf, sizeof(buf), pipe)) run.output += buf;
+#if defined(_WIN32)
+        run.exitCode = _pclose(pipe);
+#else
+        run.exitCode = pclose(pipe);
+#endif
+        std::istringstream lines(run.output);
+        for (std::string l; std::getline(lines, l);)
+        {
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            if (const auto eq = l.find('='); eq != std::string::npos) run.fields[l.substr(0, eq)] = l.substr(eq + 1);
+        }
+        return run;
+    }
 
     std::string Slurp(const std::filesystem::path& p) { return ReadFileBinary(p); }
 
@@ -174,7 +231,7 @@ TEST_CASE("physics component ids are the three integers after WorldBounds", "[ph
 
     // The child is the only Runtime in its process. Random order in THIS process
     // would already have minted the ids, so the absence check cannot live here.
-    CHECK(SpawnNoHookChild() != 0);
+    CHECK(SpawnNoHookChild() == 1);   // one failed case, not a crash (an AV is a different code)
 }
 
 TEST_CASE("BeginFrame clears frameEvents and leaves stepEvents until the next step", "[physics][hook]")
@@ -191,7 +248,8 @@ TEST_CASE("BeginFrame clears frameEvents and leaves stepEvents until the next st
         rt.Loop().Advance(1.0 / 60.0, [](double) {}, [](double, double) {});
         stepHadRows = AnyRows(world->StepEvents());
     }
-    world->BeginFrame();
+    // A zero-step Advance runs only the frame-begin wiring (the hook's FrameBegin).
+    rt.Loop().Advance(0.0, [](double) {}, [](double, double) {});
     const auto frame = world->FrameEvents();
     CHECK(frame.contactBegin.empty());
     CHECK(frame.contactEnd.empty());
@@ -211,27 +269,39 @@ TEST_CASE("Engine and Render and Client and Editor and Server include no physics
     const std::vector<std::string> banned = {
         "Physics2DDetail.hpp", "Physics2DHandles.hpp", "PhysicsSystem.hpp",
         "PhysicsDebugGeometry.hpp", "Manifold2D/" };
+    // ArcaneEngine reaches no Physics2D header at all (fix round 1: GameModule.hpp ->
+    // AbiManifestGame.hpp -> AbiManifestEngine.hpp used to include five of them).
+    const std::vector<std::string> bannedInEngine = {
+        "Arcane/Physics2D.hpp", "Physics2DFwd.hpp", "Physics2DWorld.hpp", "PhysicsEvents2D.hpp" };
+    // Only #include lines count, so a comment naming a header (PluginABI.hpp's
+    // changelog) needs no exemption.
+    const std::regex includeLine(R"(^\s*#\s*include\b)");
     int scanned = 0;
     for (const auto& dir : dirs)
     {
         REQUIRE(std::filesystem::exists(root / dir));
+        const bool engine = dir == "Source/Runtime/ArcaneEngine";
         for (const auto& entry : std::filesystem::recursive_directory_iterator(root / dir))
         {
             if (!entry.is_regular_file()) continue;
             const auto ext = entry.path().extension();
             if (ext != ".hpp" && ext != ".cpp") continue;
-            // RULING (Task 8): Plugin/AbiManifestEngine.hpp hashes the physics layouts and
-            // names the solver headers on purpose. Only the digest tool, its mutants and
-            // ArcaneTests compile it (through Core/AbiManifest.hpp); no Engine TU does.
-            // PluginABI.hpp is exempt too: its changelog comment (history, version 4x) names
-            // PhysicsSystem.hpp, and that file is not edited outside an ABI bump.
-            if (entry.path().filename() == "AbiManifestEngine.hpp" || entry.path().filename() == "PluginABI.hpp") continue;
             ++scanned;
-            const std::string text = Slurp(entry.path());
-            for (const auto& ban : banned)
+            std::istringstream text(Slurp(entry.path()));
+            for (std::string line; std::getline(text, line);)
             {
-                INFO(entry.path().string() << " names " << ban);
-                CHECK(text.find(ban) == std::string::npos);
+                if (!std::regex_search(line, includeLine)) continue;
+                for (const auto& ban : banned)
+                {
+                    INFO(entry.path().string() << " includes " << ban);
+                    CHECK(line.find(ban) == std::string::npos);
+                }
+                if (!engine) continue;
+                for (const auto& ban : bannedInEngine)
+                {
+                    INFO(entry.path().string() << " includes " << ban);
+                    CHECK(line.find(ban) == std::string::npos);
+                }
             }
         }
     }
@@ -254,6 +324,17 @@ TEST_CASE("Engine and Render and Client and Editor and Server include no physics
     CHECK(Slurp(root / "Source/Runtime/ArcaneEngine/ArcaneEngine.arcmodule").find("ArcanePhysics2D") == std::string::npos);
     CHECK(Slurp(root / "Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsSystem2D.hpp")
               .find("ArcanePhysics2DApi.hpp") == std::string::npos);
+
+    // Scene's PhysicsSystem2DApi.hpp re-spells ArcanePhysics2DApi.hpp's export
+    // switch; both must test the same three build defines.
+    const std::string sceneApi = Slurp(root / "Source/Runtime/ArcaneScene/src/Arcane/Scene/PhysicsSystem2DApi.hpp");
+    const std::string moduleApi = Slurp(root / "Source/Runtime/ArcanePhysics2D/src/Arcane/Modules/ArcanePhysics2DApi.hpp");
+    for (const char* define : { "ARC_MONOLITHIC", "ARC_PHYSICS2D_STATIC", "ARC_PHYSICS2D_EXPORTS" })
+    {
+        INFO(define);
+        CHECK(sceneApi.find(define) != std::string::npos);
+        CHECK(moduleApi.find(define) != std::string::npos);
+    }
 }
 
 TEST_CASE("game-facing headers name no Manifold2D in a public declaration", "[physics][hook]")
@@ -407,11 +488,84 @@ TEST_CASE("SimHooks run in SimHook::order", "[physics][hook]")
     CHECK(hooks[1].Prewarm != nullptr);
     CHECK(hooks[2].order == 300);
 
-    // RegisterSimHook inserts in ascending order too.
+    // RegisterSimHook inserts in ascending order too (before the seal).
+    (void)Arcane::SetSimHooksSealedForTest(false);
     Arcane::SimHook mid; mid.order = 200;
-    Arcane::RegisterSimHook(mid);
+    CHECK(Arcane::RegisterSimHook(mid));
     const auto after = Arcane::SimHooks();
     REQUIRE(after.size() == 4);
     CHECK(after[2].order == 200);
     CHECK(after[3].order == 300);
+}
+
+TEST_CASE("ProcessContext::Create seals the sim hooks and a later registration is refused", "[physics][hook]")
+{
+    HookRestore restore;
+    (void)Arcane::Test::Process();   // this exe's one ProcessContext exists from here on
+    CHECK(Arcane::SimHooksSealed());
+    const std::size_t before = Arcane::SimHooks().size();
+    Arcane::SimHook late; late.order = 150; late.Prewarm = &NoopPrewarm;
+    CHECK_FALSE(Arcane::RegisterSimHook(late));
+    CHECK(Arcane::SimHooks().size() == before);
+
+    // The 2D query slot shares the seal: a plugin-loaded copy of the module is refused there too.
+    constexpr Arcane::PhysicsSilhouetteFillFn2D fakeSilhouettes =
+        [](const Astra::Registry&, std::vector<Arcane::PhysicsColliderSilhouette2D>&) {};
+    CHECK_FALSE(Arcane::SetPhysicsQueryFns2D(nullptr, fakeSilhouettes));
+}
+
+TEST_CASE("UnregisterSimHooksInRange drops a hook whose function lies inside the image", "[physics][hook]")
+{
+#if defined(_WIN32)
+    HookRestore restore;
+    const auto addr = reinterpret_cast<std::uintptr_t>(&NoopPrewarm);
+    Arcane::Module::ImageSpan self{};
+    for (const auto& m : Arcane::Module::MappedModules())
+    {
+        const auto lo = reinterpret_cast<std::uintptr_t>(m.image.base);
+        if (addr >= lo && addr < lo + m.image.size) { self = m.image; break; }
+    }
+    REQUIRE(self.base != nullptr);   // the ArcaneTests image
+
+    std::vector<Arcane::SimHook> hooks(restore.saved.begin(), restore.saved.end());
+    Arcane::SimHook mine; mine.order = 900; mine.Prewarm = &NoopPrewarm;
+    hooks.push_back(mine);
+    Arcane::ReplaceSimHooksForTest(hooks);
+    REQUIRE(Arcane::SimHooks().size() == restore.saved.size() + 1);
+
+    CHECK(Arcane::UnregisterSimHooksInRange(nullptr, 0) == 0);
+    CHECK(Arcane::UnregisterSimHooksInRange(self.base, self.size) == 1);
+    CHECK(Arcane::SimHooks().size() == restore.saved.size());   // the Physics2D hook lives in its own image
+    for (const Arcane::SimHook& h : Arcane::SimHooks())
+        CHECK(h.Prewarm != &NoopPrewarm);
+
+    // The RAII registrar's path: UnregisterSimHook removes exactly the hook it is given.
+    Arcane::ReplaceSimHooksForTest(hooks);
+    CHECK(Arcane::UnregisterSimHook(mine));
+    CHECK_FALSE(Arcane::UnregisterSimHook(mine));
+    CHECK(Arcane::SimHooks().size() == restore.saved.size());
+#else
+    SKIP("Module::MappedModules is Windows-only");
+#endif
+}
+
+TEST_CASE("a plugin-loaded SimHook is refused and nothing dangles after unload", "[physics][hook]")
+{
+    // HotReloadPluginV1 imports ArcanePhysics2D (its descriptor names it); the
+    // child links ArcaneEngine only, so the module maps Physics2D after the seal.
+    // Addressed from the exe, not the cwd (another case may move the cwd).
+    const std::string module = (std::filesystem::path(Arcane::ExecutablePathUtf8()).parent_path().parent_path()
+                                / "HotReloadPluginV1" / Arcane::Test::ModuleFile("HotReloadPluginV1")).string();
+    REQUIRE(std::filesystem::exists(module));
+    const SimHookChildRun run = RunSimHookChild(module);
+    INFO("child output: " << run.output);
+    CHECK(run.exitCode == 0);
+    REQUIRE(run.fields.count("loaded") == 1);
+    CHECK(run.fields.at("loaded") == "1");
+    CHECK(run.fields.at("sealed") == "1");
+    CHECK(run.fields.at("physics2dMappedBefore") == "0");   // the child does not link it
+    CHECK(run.fields.at("physics2dMappedAtLoad") == "1");   // the module really imports it
+    CHECK(run.fields.at("hooksAfterLoad") == run.fields.at("hooksBefore"));
+    CHECK(run.fields.at("hooksAfterUnload") == run.fields.at("hooksBefore"));
+    CHECK(run.fields.count("advanced") == 1);   // the fresh Runtime stepped after the unload
 }

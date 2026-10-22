@@ -8,6 +8,7 @@
 #include "Helpers/PhysicsV1Baseline.hpp"
 #include "Helpers/TestTypeContext.hpp"
 
+#include <Arcane/Sim/SimHook.hpp>
 #include <Arcane/Render/ExtractFrame.hpp>
 #include <Arcane/Render/RenderFramePacket.hpp>
 #include <Arcane/Scene/Physics2DWorld.hpp>
@@ -291,7 +292,11 @@ TEST_CASE("a second 2D query registration is refused", "[physics][proxy]")
     StepScene(rt);
     constexpr Arcane::PhysicsDebugFillFn2D fake =
         [](const Astra::Registry&, const Arcane::PhysicsDebugExtractRequest2D&) { return Arcane::PhysicsDebugGeometry{}; };
+    // Unsealed for the call: this pins the DIFFERENT-PAIR refusal, not the
+    // sim-hook seal's (PhysicsHookBootTest covers that one).
+    const bool sealed = Arcane::SetSimHooksSealedForTest(false);
     CHECK_FALSE(Arcane::SetPhysicsQueryFns2D(fake, nullptr));
+    (void)Arcane::SetSimHooksSealedForTest(sealed);
     CheckDebug("v1-debug-wholeworld.txt", rt.Registry(), WholeWorldRequest());
 }
 

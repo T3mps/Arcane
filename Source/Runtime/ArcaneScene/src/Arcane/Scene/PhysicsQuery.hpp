@@ -77,7 +77,13 @@ namespace Arcane
     // Stores the pair. True when both slots were empty or already hold this
     // pair. A different second registration is refused: the first pair stays,
     // one error is logged, and the result is false.
+    // Also refused after the sim-hook seal (Sim/SimHook.hpp): the 2D module is
+    // host-linked, so a registration after ProcessContext::Create is a
+    // plugin-loaded copy whose pointers would leave with the plugin.
     [[nodiscard]] ARC_SCENE_API bool SetPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept;
+    // Empties both slots when they hold exactly this pair (the registrar's
+    // destructor, before its image unmaps). True when it cleared them.
+    ARC_SCENE_API bool ClearPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept;
     ARC_SCENE_API PhysicsDebugGeometry FillPhysicsDebug2D(const Astra::Registry& reg, const PhysicsDebugExtractRequest2D& request);
     ARC_SCENE_API void FillColliderSilhouettes2D(const Astra::Registry& reg, std::vector<PhysicsColliderSilhouette2D>& out);
 }
