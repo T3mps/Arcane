@@ -146,9 +146,9 @@ namespace Arcane::AssetPipeline
     [[nodiscard]] ARC_ASSET_PIPELINE_API std::optional<LoadedArtifact> ReadTextureArtifact(const std::filesystem::path& path);
 
     // ---- Mesh artifacts (F2c) ---------------------------------------------------------------
-    // Independent writer/reader pair, sharing this file's byte-explicit ByteWriter/ByteReader
-    // primitives and the SectionTag space above -- see the file banner and SectionTag's own
-    // comment for why one shared tag space is load-bearing rather than incidental.
+    // Writer/reader pair over the byte codec in ArcaneAssets (ArtifactCodec.hpp), which owns the
+    // byte-explicit ByteWriter/ByteReader primitives and the SectionTag space -- see the file
+    // banner for why one shared tag space is load-bearing rather than incidental.
 
     // One drawable range with its material slot. `slotIndex` is comparison A1: two primitives
     // sharing one glTF material become TWO sections pointing at ONE slot, never two identically
@@ -191,7 +191,7 @@ namespace Arcane::AssetPipeline
         std::uint32_t sectionCount = 0;
         // Comparison A5: DECLARED, not inferred. 4 in v1, asserted == 4 on read, so a future
         // 16-bit path is a reader BRANCH rather than a tag-presence dance duplicated across
-        // the two deliberately-independent readers.
+        // the pipeline reader and the runtime reader.
         std::uint8_t  indexWidth = 4;
 
         // The cooked AABB (s7.1): taken from the artifact rather than recomputed on load.

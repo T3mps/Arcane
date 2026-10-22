@@ -21,8 +21,8 @@ namespace Arcane
 
         // Fixed header, parsed out of a whole-file buffer. Mirrors
         // AssetPipeline::TextureArtifactDesc field-for-field (ArtifactFormat.hpp), minus the
-        // pipeline type -- see this file's header banner for why this is a hand-mirrored
-        // reimplementation rather than a shared struct.
+        // pipeline type (the runtime reader does not include pipeline headers). The byte layout
+        // itself is owned by ArtifactCodec.
         struct ParsedHeader
         {
             std::uint8_t  contentKind = 0;
@@ -258,15 +258,15 @@ namespace Arcane
         }
 
         // ---- Mesh artifacts (F2c Task 4) --------------------------------------------------
-        // Independent reimplementation of the mesh half -- see ArtifactReader.hpp's own
-        // header banner (MESH TAIL layout) for the contract this mirrors field-for-field
+        // The byte codec lives in ArcaneAssets (ArtifactCodec.hpp); see ArtifactReader.hpp's
+        // header banner (MESH TAIL layout) for the contract these types mirror field-for-field
         // from AssetPipeline::MeshArtifactDesc/MeshArtifactSection, without including that
         // header.
 
         // Fixed mesh header tail, parsed out of a whole-file buffer. Mirrors
         // AssetPipeline::MeshArtifactDesc field-for-field (ArtifactFormat.hpp), minus the
-        // pipeline type -- see this file's header banner for why this is a hand-mirrored
-        // reimplementation rather than a shared struct.
+        // pipeline type (the runtime reader does not include pipeline headers). The byte layout
+        // itself is owned by ArtifactCodec.
         struct ParsedMeshHeader
         {
             std::uint8_t  contentKind = 0;
@@ -482,8 +482,8 @@ namespace Arcane
         }
 
         // Review fix (post-Task-11): percent-decode a URI, mirroring
-        // ThirdParty/cgltf/cgltf.h's own `cgltf_decode_uri` BYTE FOR BYTE (this file's
-        // no-shared-code banner -- cgltf is a pipeline-side dependency, never linked here).
+        // ThirdParty/cgltf/cgltf.h's own `cgltf_decode_uri` BYTE FOR BYTE (cgltf is a
+        // pipeline-side dependency, never linked into this runtime library).
         // ReadClientExternalBuffers below is the ONE caller, and it is REQUIRED: a glTF
         // buffer uri is percent-encoded whenever it carries a reserved character (a space
         // -> "%20", non-ASCII -- common in an artist's export), and the pipeline's OWN

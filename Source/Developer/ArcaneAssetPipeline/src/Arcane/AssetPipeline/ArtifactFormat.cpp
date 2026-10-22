@@ -184,7 +184,8 @@ namespace Arcane::AssetPipeline
     }
 
     // ---- Mesh artifacts (F2c) --------------------------------------------------------------
-    // Independent writer/reader pair -- see ArtifactFormat.hpp's file banner for why the two
+    // Writer/reader pair over the ArcaneAssets byte codec (ArtifactCodec.hpp) -- see
+    // ArtifactFormat.hpp's file banner for why the two
     // kinds share ONE container format and ONE SectionTag space, and ArtifactFormat.hpp's own
     // struct comments for the A1/A5 design comparisons cited below.
 

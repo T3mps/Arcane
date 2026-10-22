@@ -1,7 +1,7 @@
 #pragma once
 #include <Arcane/Modules/ArcaneAssetsApi.hpp>
 
-// Arcane::ArtifactReader -- the ArcaneClient-local reader for ".arcart" artifacts. As of
+// Arcane::ArtifactReader -- the ArcaneAssets runtime reader for ".arcart" artifacts. As of
 // F2c Task 4 this covers BOTH artifact kinds the container format carries: Texture
 // (ReadClientArtifact, F2b Task 6) and Mesh (ReadClientMeshArtifact, F2c Task 4).
 //
@@ -210,7 +210,7 @@ namespace Arcane
 {
     // Client-local MIRROR of Arcane::AssetPipeline::ArtifactPixelFormat's VALUES
     // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp) -- deliberately
-    // NOT shared (see this file's header banner). The numeric values below must stay in
+    // NOT shared (this runtime reader does not include pipeline headers). The numeric values below must stay in
     // lockstep with that enum BY HAND: RGBA8=0, BC7=1, BC5_Reserved=2, BC6H_Reserved=3.
     // A drift here is caught immediately by ArtifactReaderTest.cpp's cross-lib
     // byte-contract case: it writes through the pipeline's REAL enum and reads the byte
@@ -277,7 +277,8 @@ namespace Arcane
 
     // This engine's own copy of the pipeline's kTextureImporterVersion
     // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/CookKey.hpp) -- mirrored BY HAND,
-    // never included, per this file's no-shared-code banner above. Bump this number IN
+    // never included (the runtime reader does not include pipeline headers; the value is
+    // pipeline-owned cook policy). Bump this number IN
     // LOCKSTEP with that one; a mismatch left standing would make every artifact THIS
     // engine's own cook produces look "newer than the engine" to itself the moment the
     // pipeline-side constant moves without a matching edit here.
@@ -298,13 +299,13 @@ namespace Arcane
         const Guid& expectedSourceGuid);
 
     // ---- Mesh artifacts (F2c Task 4) ----------------------------------------------------
-    // Independent reimplementation of the mesh half of the contract -- see this file's
-    // header banner (BYTE-CONTRACT PEER paragraph and the MESH TAIL on-disk layout) and
-    // ArtifactFormat.hpp's own MeshArtifactDesc/MeshArtifactSection, which this mirrors
-    // field for field WITHOUT including that header.
+    // The byte codec lives in ArcaneAssets (ArtifactCodec.hpp); the pipeline keeps cook policy.
+    // See this file's header banner (the MESH TAIL on-disk layout) and ArtifactFormat.hpp's own
+    // MeshArtifactDesc/MeshArtifactSection, which this mirrors field for field without
+    // including that header.
 
-    // Mirrors AssetPipeline::MeshArtifactSection field for field (see this file's
-    // no-shared-code banner). `indexOffset`/`indexCount` are in INDICES.
+    // Mirrors AssetPipeline::MeshArtifactSection field for field (the runtime reader does not
+    // include pipeline headers). `indexOffset`/`indexCount` are in INDICES.
     struct MeshSectionView
     {
         std::string   name;
@@ -365,13 +366,13 @@ namespace Arcane
     // every referenced buffer's bytes, in glTF declaration order (see this file's MESH TAIL
     // banner and the sourceHash field's own comment). `AssetsImpl` needs that exact
     // concatenation to validate a candidate artifact, but must NEVER link ArcaneAssetPipeline
-    // (this file's own no-shared-code banner) -- so this reads the buffer LIST straight out
+    // (a runtime library does not depend on the developer pipeline) -- so this reads the buffer LIST straight out
     // of the .gltf's own JSON text (`buffers[].uri`) instead of going through cgltf.
     //
     // BYTE-CONTRACT PEER: Arcane::AssetPipeline::ReadExternalBuffers
     // (Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/MeshImporter.cpp) is the OTHER half of
-    // this contract -- a DELIBERATE, INDEPENDENT reimplementation, agreeing with this
-    // function BY HAND rather than by shared code, per this file's own header banner. Both
+    // this contract. It is not part of the byte codec (ArtifactCodec.hpp owns the artifact
+    // bytes); it is source-side cook policy, so the two agree BY HAND. Both
     // sides: skip a buffer with no `uri` (embedded -- a GLB's BIN chunk, or cgltf's own
     // `.data` set some other way) and skip a `data:` URI (inline, already resolved wherever
     // it is consumed, checked against the RAW still-encoded uri on both sides); PERCENT-

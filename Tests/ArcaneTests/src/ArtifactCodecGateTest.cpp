@@ -152,7 +152,7 @@ namespace
 
 TEST_CASE("one kArtifactVersion and one SectionTag", "[artifact][codec]")
 {
-    const std::regex version(R"(constexpr\s+std::uint32_t\s+kArtifactVersion\b)");
+    const std::regex version(R"(\bkArtifactVersion\s*(=(?!=)|\{))");
     const std::regex tagEnum(R"(enum\s+class\s+SectionTag\b)");
     const std::regex tangentsUse(R"(SectionTag\s*::\s*Tangents\b)");
 
