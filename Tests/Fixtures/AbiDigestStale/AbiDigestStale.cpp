@@ -8,13 +8,35 @@
 // ArcaneTests.exe): GamePlugin_Init writes a sentinel file named by the
 // ARC_ABI_DIGEST_SENTINEL environment variable, so the test can prove the host
 // refused the module BEFORE Init.
+//
+// 3D-readiness Plan A Task 8 fix round 2: the descriptor also names
+// ArcanePhysics2D, an engine module AbiDigestChild does not link, so this DLL
+// maps it at load and the refusal unmaps it again. The static below prints,
+// from inside the load (Physics2D's statics have run by then), whether that
+// dependency is mapped: the witness that the refused load really mapped it.
 
 #include <Arcane/Core/AbiVersion.hpp>
 #include <Arcane/Plugin/GameModule.hpp>
+#include <Arcane/Plugin/Module.hpp>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
+
+#if defined(_WIN32)
+namespace
+{
+    // Runs at image load, after every import of this DLL has initialised.
+    // MappedImage is GetModuleHandleW: no loader reference, nothing loaded.
+    const int g_physics2dWitness = [] {
+        const bool mapped = ::Arcane::Module::MappedImage("ArcanePhysics2D.dll").base != nullptr;
+        std::printf("fixturePhysics2dMapped=%d\n", mapped ? 1 : 0);
+        std::fflush(stdout);
+        return 0;
+    }();
+}
+#endif
 
 extern "C"
 {

@@ -1,10 +1,17 @@
 #include <Arcane/Plugin/Plugin.hpp>
 
+#include <Arcane/Base/Log.hpp>
 #include <Arcane/Config/CVarRegistry.hpp>
+#include <Arcane/Core/ModuleAttach.hpp>
+#include <Arcane/Scene/PhysicsQuery.hpp>
+#include <Arcane/Sim/SimHook.hpp>
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -80,6 +87,25 @@ namespace
     bool ResolveGamePluginAbi(Arcane::Module& module, Arcane::PluginVTable& out) noexcept
     {
         return ResolveGamePluginAbi(module, out, nullptr);
+    }
+
+    // Drops everything an image's statics can have registered into the
+    // process-wide lists at image load, while the image is still mapped: cvars,
+    // settings blocks and log setters (CVarRegistry), the module-attach callback,
+    // sim hooks and the 2D physics query pair. Component descriptors are not
+    // here: they are created only by a Runtime's RegisterComponents, which a
+    // refused load never reaches (PluginHost's TeardownImage purges those).
+    void DropImageRegistrations(const void* base, std::size_t size, const std::filesystem::path& image)
+    {
+        if (!base || size == 0)
+            return;
+        const std::size_t cvars    = Arcane::CVarRegistry::Get().UnregisterModuleRange(base, size);
+        const std::size_t attaches = Arcane::UnregisterModuleAttachInRange(base, size);
+        const std::size_t hooks    = Arcane::UnregisterSimHooksInRange(base, size);
+        const bool        query    = Arcane::ClearPhysicsQueryFns2DInRange(base, size);
+        if (cvars != 0 || attaches != 0 || hooks != 0 || query)
+            ARC_TRACE("plugin: refused load dropped {} cvar slot(s), {} module-attach callback(s), {} sim hook(s){} of '{}'",
+                      cvars, attaches, hooks, query ? " and the 2D query pair" : "", image.generic_string());
     }
 }
 
@@ -180,6 +206,12 @@ namespace Arcane
         // image span to the post-load span: a match means this Load owns
         // none of the registrations in that range and must not drop them.
         const Module::ImageSpan already = Module::MappedImage(path);
+        // The mapped set before the load (Task 8 fix round 2): a refusal below
+        // must also clean every DEPENDENCY image this load newly mapped (an
+        // engine module the game imports but the host does not link). Their
+        // statics ran inside Module::Load and they unmap with `module`.
+        // Windows-only like MappedModules; elsewhere the set is empty.
+        const std::vector<Module::MappedModule> mappedBefore = Module::MappedModules();
         std::optional<Module> module;
         {
             const CVarModuleScope scope(cvarModule);
@@ -206,7 +238,22 @@ namespace Arcane
             // point into. An already-mapped engine DLL shares this span with
             // the live owner -- leave it.
             if (!alreadyMapped)
-                CVarRegistry::Get().UnregisterModuleRange(loaded.base, loaded.size);
+                DropImageRegistrations(loaded.base, loaded.size, module->Path());
+            // ...and the same for each image this load newly mapped, while
+            // `module` still holds them: a registration left in Core would call
+            // into freed code at the next Runtime constructor (AttachAllModules),
+            // cvar or settings walk, or exit.
+            for (const Module::MappedModule& mapped : Module::MappedModules())
+            {
+                const void* const base = mapped.image.base;
+                if (!base || base == loaded.base)
+                    continue;
+                const bool fresh = std::ranges::none_of(mappedBefore, [base](const Module::MappedModule& m) {
+                    return m.image.base == base;
+                });
+                if (fresh)
+                    DropImageRegistrations(base, mapped.image.size, mapped.path);
+            }
             return std::nullopt;
         }
 

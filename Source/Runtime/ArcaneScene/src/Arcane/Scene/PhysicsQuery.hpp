@@ -17,6 +17,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -84,6 +85,10 @@ namespace Arcane
     // Empties both slots when they hold exactly this pair (the registrar's
     // destructor, before its image unmaps). True when it cleared them.
     ARC_SCENE_API bool ClearPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept;
+    // Fallback net (Task 8 fix round 2): empties both slots when either holds a
+    // function inside [base, base + size). True when it cleared them. Plugin::Load
+    // runs it over a dependency image a refused load mapped, before the unmap.
+    ARC_SCENE_API bool ClearPhysicsQueryFns2DInRange(const void* base, std::size_t size) noexcept;
     ARC_SCENE_API PhysicsDebugGeometry FillPhysicsDebug2D(const Astra::Registry& reg, const PhysicsDebugExtractRequest2D& request);
     ARC_SCENE_API void FillColliderSilhouettes2D(const Astra::Registry& reg, std::vector<PhysicsColliderSilhouette2D>& out);
 }

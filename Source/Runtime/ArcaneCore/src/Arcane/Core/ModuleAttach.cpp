@@ -42,6 +42,19 @@ namespace Arcane
         catch (...) { std::terminate(); }
     }
 
+    bool UnregisterModuleAttach(ModuleAttachFn fn) noexcept
+    {
+        if (!fn)
+            return false;
+        auto& registry = Registry();
+        std::lock_guard lock(registry.mutex);
+        const auto it = std::find(registry.callbacks.begin(), registry.callbacks.end(), fn);
+        if (it == registry.callbacks.end())
+            return false;
+        registry.callbacks.erase(it);
+        return true;
+    }
+
     std::size_t UnregisterModuleAttachInRange(const void* base, std::size_t size) noexcept
     {
         if (!base || size == 0)

@@ -12,6 +12,7 @@
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Platform/Platform.hpp>   // ExecutableFileName
 #include <Arcane/Base/Engine.hpp>         // ExecutablePathUtf8
+#include <Arcane/Core/ModuleAttach.hpp>
 #include <Arcane/Plugin/Module.hpp>       // MappedModules: the ArcaneTests image span
 #include <Arcane/Scene/PhysicsQuery.hpp>
 #include <Arcane/Scene/Components.hpp>
@@ -582,5 +583,42 @@ TEST_CASE("a plugin-loaded SimHook is refused and nothing dangles after unload",
     CHECK(run.fields.at("physics2dMappedAtLoad") == "1");   // the module really imports it
     CHECK(run.fields.at("hooksAfterLoad") == run.fields.at("hooksBefore"));
     CHECK(run.fields.at("hooksAfterUnload") == run.fields.at("hooksBefore"));
+    REQUIRE(run.fields.count("physics2dMappedAfterUnload") == 1);
+    CHECK(run.fields.at("physics2dMappedAfterUnload") == "0");   // the unload really unmapped it: the fresh Runtime is not vacuous
     CHECK(run.fields.count("advanced") == 1);   // the fresh Runtime stepped after the unload
+}
+
+namespace
+{
+    int g_attachProbeCalls = 0;
+    void AttachProbe(Astra::TypeContext*) { ++g_attachProbeCalls; }
+}
+
+TEST_CASE("UnregisterModuleAttach and the range net drop exactly the callback they are given", "[physics][hook]")
+{
+    // Task 8 fix round 2: ARC_MODULE_ATTACH's registrar destructor calls
+    // UnregisterModuleAttach; Plugin::Load's refusal net and EndLoadSession call
+    // UnregisterModuleAttachInRange. RegisterModuleAttach may call the probe at
+    // once (a context is installed); the probe only counts.
+    Arcane::RegisterModuleAttach("AttachProbe", &AttachProbe);
+    CHECK(Arcane::UnregisterModuleAttach(&AttachProbe));
+    CHECK_FALSE(Arcane::UnregisterModuleAttach(&AttachProbe));   // exactly one registration left
+    CHECK_FALSE(Arcane::UnregisterModuleAttach(nullptr));
+#if defined(_WIN32) && !defined(ARC_MONOLITHIC)   // one image per module: the probe is alone in this one
+    const auto addr = reinterpret_cast<std::uintptr_t>(&AttachProbe);
+    Arcane::Module::ImageSpan self{};
+    for (const auto& m : Arcane::Module::MappedModules())
+    {
+        const auto lo = reinterpret_cast<std::uintptr_t>(m.image.base);
+        if (addr >= lo && addr < lo + m.image.size) { self = m.image; break; }
+    }
+    REQUIRE(self.base != nullptr);   // the ArcaneTests image
+    Arcane::RegisterModuleAttach("AttachProbe", &AttachProbe);
+    CHECK(Arcane::UnregisterModuleAttachInRange(nullptr, 0) == 0);
+    CHECK(Arcane::UnregisterModuleAttachInRange(self.base, self.size) == 1);   // the engine modules' callbacks live in their own images
+    CHECK_FALSE(Arcane::UnregisterModuleAttach(&AttachProbe));
+    // The 2D query pair lives in ArcanePhysics2D's image, not this one: the range clear leaves it.
+    CHECK_FALSE(Arcane::ClearPhysicsQueryFns2DInRange(nullptr, 0));
+    CHECK_FALSE(Arcane::ClearPhysicsQueryFns2DInRange(self.base, self.size));
+#endif
 }

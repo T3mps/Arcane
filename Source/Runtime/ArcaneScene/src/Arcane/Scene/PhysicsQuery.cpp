@@ -2,6 +2,9 @@
 #include <Arcane/Base/Log.hpp>
 #include <Arcane/Sim/SimHook.hpp>   // SimHooksSealed: the query slot shares the hook seal
 
+#include <cstddef>
+#include <cstdint>
+
 namespace Arcane
 {
     namespace
@@ -34,6 +37,22 @@ namespace Arcane
     bool ClearPhysicsQueryFns2D(PhysicsDebugFillFn2D debug, PhysicsSilhouetteFillFn2D silhouettes) noexcept
     {
         if (g_debugFill2D != debug || g_silhouetteFill2D != silhouettes)
+            return false;
+        g_debugFill2D = nullptr;
+        g_silhouetteFill2D = nullptr;
+        return true;
+    }
+
+    bool ClearPhysicsQueryFns2DInRange(const void* base, std::size_t size) noexcept
+    {
+        if (!base || size == 0)
+            return false;
+        const auto lo = reinterpret_cast<std::uintptr_t>(base);
+        const auto inside = [&](auto fn) {
+            const auto at = reinterpret_cast<std::uintptr_t>(fn);
+            return fn != nullptr && at >= lo && at - lo < size;
+        };
+        if (!inside(g_debugFill2D) && !inside(g_silhouetteFill2D))
             return false;
         g_debugFill2D = nullptr;
         g_silhouetteFill2D = nullptr;

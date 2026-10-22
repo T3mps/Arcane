@@ -19,9 +19,19 @@
 // after it and after the unload, whether ArcanePhysics2D was mapped, then
 // builds a fresh Runtime and runs ClearSystems, EnsurePhysics and one 1/60
 // Advance. Exits 0 when the hook list never changed and nothing faulted.
+//
+// Third form (Task 8 fix round 2): AbiDigestChild <module> <sentinel>
+// --then-runtime. The default mode, then the proof that a REFUSED load left
+// nothing behind from a dependency image it mapped and unmapped (AbiDigestStale
+// imports ArcanePhysics2D, which this exe does not link): it prints whether
+// ArcanePhysics2D is still mapped, then creates a ProcessContext and a Runtime
+// (AttachAllModules), runs ClearSystems, EnsurePhysics and one 1/60 Advance,
+// and walks every module's log-level setter (ApplyLogSettings). Each of those
+// calls a registration the dependency image may have left in Core.
 
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
+#include <Arcane/Config/Bindings/LogBinding.hpp>
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/Plugin.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
@@ -55,7 +65,7 @@ namespace
         const std::size_t before = Arcane::SimHooks().size();
         const bool mappedBefore = Physics2DMapped();
         std::size_t afterLoad = 0, afterUnload = 0;
-        bool loaded = false, mappedAtLoad = false;
+        bool loaded = false, mappedAtLoad = false, mappedAfterUnload = true;
         {
             Arcane::Runtime rt(*process);
             Arcane::PluginHost host(*process, std::filesystem::path(module));
@@ -66,12 +76,13 @@ namespace
             afterLoad = Arcane::SimHooks().size();
             host.Unload();
             afterUnload = Arcane::SimHooks().size();
+            mappedAfterUnload = Physics2DMapped();
             host.DetachRuntime(rt);
         }
         std::printf("loaded=%d\nsealed=%d\nphysics2dMappedBefore=%d\nphysics2dMappedAtLoad=%d\n"
-                    "hooksBefore=%zu\nhooksAfterLoad=%zu\nhooksAfterUnload=%zu\n",
+                    "physics2dMappedAfterUnload=%d\nhooksBefore=%zu\nhooksAfterLoad=%zu\nhooksAfterUnload=%zu\n",
                     loaded ? 1 : 0, Arcane::SimHooksSealed() ? 1 : 0, mappedBefore ? 1 : 0, mappedAtLoad ? 1 : 0,
-                    before, afterLoad, afterUnload);
+                    mappedAfterUnload ? 1 : 0, before, afterLoad, afterUnload);
         std::fflush(stdout);
         // A fresh world after the unload: nothing the module left may run.
         {
@@ -85,15 +96,37 @@ namespace
         const bool ok = loaded && before == afterLoad && before == afterUnload;
         return ok ? 0 : 1;
     }
+
+    // After a refused load: nothing a dependency image registered may run.
+    int RunAfterRefusal()
+    {
+        std::printf("physics2dMappedAfterRefusal=%d\n", Physics2DMapped() ? 1 : 0);
+        std::fflush(stdout);
+        auto process = Arcane::ProcessContext::Create({});
+        if (!process)
+            return 10;
+        Astra::SetTypeContext(&process->TypeContext(), Astra::ModuleResidency::Resident);
+        {
+            Arcane::Runtime rt(*process);   // AttachAllModules
+            rt.ClearSystems();
+            rt.EnsurePhysics();
+            (void)rt.Loop().Advance(1.0 / 60.0);
+        }
+        Arcane::ApplyLogSettings(Arcane::LogSettings{});   // every module's level setter
+        std::printf("runtimeAfterRefusal=1\n");
+        std::fflush(stdout);
+        return 0;
+    }
 }
 
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::strcmp(argv[1], "--sim-hook") == 0)
         return RunSimHookMode(argv[2]);
-    if (argc < 3)
+    const bool thenRuntime = argc == 4 && std::strcmp(argv[3], "--then-runtime") == 0;
+    if (argc < 3 || (argc > 3 && !thenRuntime))
     {
-        std::fputs("usage: AbiDigestChild <module> <sentinel>\n", stderr);
+        std::fputs("usage: AbiDigestChild <module> <sentinel> [--then-runtime]\n", stderr);
         return 2;
     }
 #if defined(_WIN32)
@@ -122,5 +155,8 @@ int main(int argc, char** argv)
     // Init ignores the context.
     if (plugin.has_value() && plugin->VTable().Init)
         plugin->VTable().Init(nullptr);
-    return (!plugin.has_value() && error.kind == Arcane::PluginResolveError::Kind::AbiMismatch) ? 0 : 1;
+    const bool refused = !plugin.has_value() && error.kind == Arcane::PluginResolveError::Kind::AbiMismatch;
+    if (thenRuntime && refused)
+        return RunAfterRefusal();
+    return refused ? 0 : 1;
 }

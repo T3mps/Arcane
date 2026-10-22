@@ -833,7 +833,7 @@ namespace
 
     // Spawns AbiDigestChild on the named fixture DLL. A missing fixture is a
     // failure of the task, not a skip.
-    DigestChildRun RunDigestChild(const char* fixture)
+    DigestChildRun RunDigestChild(const char* fixture, const char* extraArg = nullptr)
     {
         DigestChildRun run;
         const fs::path exe = SiblingTool("AbiDigestChild", "AbiDigestChild");
@@ -852,11 +852,13 @@ namespace
         std::error_code ec;
         fs::remove(run.sentinel, ec);
 #if defined(_WIN32)
+        const std::string extra = extraArg ? std::string(" ") + extraArg : std::string();
         const std::string line = "\"\"" + exe.string() + "\" \"" + dll.string() + "\" \""
-                               + run.sentinel.string() + "\"\"";
+                               + run.sentinel.string() + "\"" + extra + "\"";
 #else
+        const std::string extra = extraArg ? std::string(" ") + extraArg : std::string();
         const std::string line = "'" + exe.string() + "' '" + dll.string() + "' '"
-                               + run.sentinel.string() + "'";
+                               + run.sentinel.string() + "'" + extra;
 #endif
         FILE* pipe = ABI_TEST_POPEN(line.c_str(), "r");
         REQUIRE(pipe != nullptr);
@@ -979,6 +981,31 @@ TEST_CASE("a 64-bit digest DLL and a stale digest DLL are refused before Init", 
     CHECK(stale.fields.at("engineDigest") == engineDigest);
     CHECK(stale.fields.at("pluginDigest") == Hex16(1));
     CHECK_FALSE(fs::exists(stale.sentinel));
+}
+
+TEST_CASE("a refused load leaves nothing registered from a dependency image it unmapped", "[plugin][abi][hook]")
+{
+    // 3D-readiness Plan A Task 8 fix round 2 (I1). AbiDigestStale imports
+    // ArcanePhysics2D; AbiDigestChild links ArcaneEngine only, so the refused
+    // raw Plugin::Load maps Physics2D (its statics register a module-attach
+    // callback, cvars and log setters, a sim hook and the query pair into
+    // Core and Scene) and unmaps it again. The child then constructs a fresh
+    // Runtime (AttachAllModules), steps it and walks the log setters: any
+    // registration the dependency left behind calls into freed code.
+#if defined(_WIN32)
+    const DigestChildRun stale = RunDigestChild("AbiDigestStale", "--then-runtime");
+    INFO("child output: " << stale.output);
+    CHECK(stale.kind == "AbiMismatch");
+    REQUIRE(stale.fields.count("fixturePhysics2dMapped") == 1);
+    CHECK(stale.fields.at("fixturePhysics2dMapped") == "1");        // the load really mapped it
+    REQUIRE(stale.fields.count("physics2dMappedAfterRefusal") == 1);
+    CHECK(stale.fields.at("physics2dMappedAfterRefusal") == "0");   // and the refusal unmapped it
+    CHECK(stale.fields.count("runtimeAfterRefusal") == 1);
+    CHECK(stale.exitCode == 0);
+    CHECK_FALSE(fs::exists(stale.sentinel));
+#else
+    SKIP("the dependency witness uses Module::MappedModules, which is Windows-only");
+#endif
 }
 
 TEST_CASE("an older-epoch module fails at the epoch and a digest-less module at the export", "[plugin][abi]")

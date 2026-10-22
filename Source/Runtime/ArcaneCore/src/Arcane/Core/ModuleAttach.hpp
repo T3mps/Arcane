@@ -15,21 +15,31 @@ namespace Arcane
     using ModuleAttachFn = void(*)(Astra::TypeContext*);
     ARC_CORE_API void RegisterModuleAttach(const char* moduleName, ModuleAttachFn fn) noexcept;
     ARC_CORE_API void AttachAllModules(Astra::TypeContext* ctx) noexcept;
+    // Removes the first registration of `fn`; true when one was removed. The
+    // ARC_MODULE_ATTACH registrar's destructor calls it, so a module image's
+    // callback leaves with the image on EVERY unmap path (Task 8 fix round 2),
+    // including a refused or raw Plugin::Load that mapped it as a dependency.
+    ARC_CORE_API bool UnregisterModuleAttach(ModuleAttachFn fn) noexcept;
     // Fallback net (3D-readiness Plan A Task 8 fix round 1): drops every attach
     // callback whose code lies in [base, base + size) and returns how many.
-    // PluginHost calls it for a dependency image a plugin load mapped, before
-    // that image unmaps, so the next AttachAllModules (every Runtime constructor)
-    // does not call into freed code.
+    // PluginHost and Plugin::Load call it for a dependency image a plugin load
+    // mapped, before that image unmaps, so the next AttachAllModules (every
+    // Runtime constructor) does not call into freed code.
     ARC_CORE_API std::size_t UnregisterModuleAttachInRange(const void* base, std::size_t size) noexcept;
 }
 
-#define ARC_MODULE_ATTACH(Name)                                                       \
-    namespace {                                                                       \
-        struct ArcModuleAttachRegistrar_##Name {                                      \
-            ArcModuleAttachRegistrar_##Name() {                                       \
-                ::Arcane::RegisterModuleAttach(#Name, [](Astra::TypeContext* c) {      \
-                    Astra::SetTypeContext(c, Astra::ModuleResidency::Resident);        \
-                });                                                                    \
-            }                                                                          \
-        } arcModuleAttachRegistrar_##Name;                                             \
+// RAII: the registrar registers at image load and unregisters at image unload
+// (its static destructor runs inside FreeLibrary / dlclose, while the image is
+// still mapped).
+#define ARC_MODULE_ATTACH(Name)                                                                   \
+    namespace {                                                                                   \
+        struct ArcModuleAttachRegistrar_##Name {                                                  \
+            static void Attach(Astra::TypeContext* c) {                                           \
+                Astra::SetTypeContext(c, Astra::ModuleResidency::Resident);                       \
+            }                                                                                     \
+            ArcModuleAttachRegistrar_##Name() { ::Arcane::RegisterModuleAttach(#Name, &Attach); } \
+            ~ArcModuleAttachRegistrar_##Name() { (void)::Arcane::UnregisterModuleAttach(&Attach); } \
+            ArcModuleAttachRegistrar_##Name(const ArcModuleAttachRegistrar_##Name&) = delete;     \
+            ArcModuleAttachRegistrar_##Name& operator=(const ArcModuleAttachRegistrar_##Name&) = delete; \
+        } arcModuleAttachRegistrar_##Name;                                                        \
     }
