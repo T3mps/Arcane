@@ -41,24 +41,33 @@ namespace
 {
     using namespace Arcane::Test;
 
-    // Runs this exe on one case with the 2D hook disabled; returns the exit code.
-    // The suite runs from the exe directory, so the exe is addressed from there.
-    int SpawnNoHookChild()
+    // Runs this exe on one case with the 2D hook disabled; returns the exit code
+    // and the child's Catch2 report. The exe is addressed by its full path (a
+    // bare name is not found when cmd.exe skips the current directory, and a
+    // "not recognized" exit 1 would pass for a red child).
+    struct NoHookChildRun { int exitCode = -1; std::string output; };
+    NoHookChildRun SpawnNoHookChild()
     {
-        const std::string exe = Arcane::Platform::ExecutableFileName("ArcaneTests");
+        NoHookChildRun run;
+        const std::string exe = Arcane::ExecutablePathUtf8();
 #if defined(_WIN32)
         const std::string cmd = "set ARCANE_TEST_NO_PHYSICS_HOOK=1&& \"" + exe +
-            "\" \"physics component ids are the three integers after WorldBounds\" --rng-seed 1 > NUL 2>&1";
+            "\" \"physics component ids are the three integers after WorldBounds\" --rng-seed 1 2>&1";
         FILE* p = _popen(("\"" + cmd + "\"").c_str(), "r");
-        if (!p) return 0;
-        return _pclose(p);
 #else
-        const std::string cmd = "ARCANE_TEST_NO_PHYSICS_HOOK=1 ./" + exe +
-            " \"physics component ids are the three integers after WorldBounds\" --rng-seed 1 > /dev/null 2>&1";
+        const std::string cmd = "ARCANE_TEST_NO_PHYSICS_HOOK=1 '" + exe +
+            "' \"physics component ids are the three integers after WorldBounds\" --rng-seed 1 2>&1";
         FILE* p = popen(cmd.c_str(), "r");
-        if (!p) return 0;
-        return pclose(p);
 #endif
+        if (!p) return run;
+        char buf[512];
+        while (std::fgets(buf, sizeof(buf), p)) run.output += buf;
+#if defined(_WIN32)
+        run.exitCode = _pclose(p);
+#else
+        run.exitCode = pclose(p);
+#endif
+        return run;
     }
 
     bool AnyRows(const Arcane::PhysicsEvents2D& e)
@@ -231,7 +240,13 @@ TEST_CASE("physics component ids are the three integers after WorldBounds", "[ph
 
     // The child is the only Runtime in its process. Random order in THIS process
     // would already have minted the ids, so the absence check cannot live here.
-    CHECK(SpawnNoHookChild() == 1);   // one failed case, not a crash (an AV is a different code)
+    // Red for the right reason: Catch2 v3's failed-test exit code (42; a crash is
+    // another code), the failure is the id lookup, and the child booted with no hook.
+    const NoHookChildRun child = SpawnNoHookChild();
+    INFO("child output: " << child.output);
+    CHECK(child.exitCode == 42);
+    CHECK(child.output.find("REQUIRE( id.IsOk() )") != std::string::npos);
+    CHECK(child.output.find("SimHooks().empty()") == std::string::npos);
 }
 
 TEST_CASE("BeginFrame clears frameEvents and leaves stepEvents until the next step", "[physics][hook]")
