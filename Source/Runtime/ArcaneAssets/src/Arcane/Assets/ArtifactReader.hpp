@@ -5,17 +5,12 @@
 // F2c Task 4 this covers BOTH artifact kinds the container format carries: Texture
 // (ReadClientArtifact, F2b Task 6) and Mesh (ReadClientMeshArtifact, F2c Task 4).
 //
-// BYTE-CONTRACT PEER: Source/Developer/ArcaneAssetPipeline/src/Arcane/AssetPipeline/ArtifactFormat.hpp/.cpp
-// (Task 1's texture writer, Task 3's mesh writer) is the OTHER half of this contract. This
-// file is a DELIBERATE, INDEPENDENT reimplementation -- ArcaneClient must never link or
-// #include ArcaneAssetPipeline (premake keeps that structurally true: ArcaneClient's
-// includedirs carry no AssetPipeline path), so the two sides stay byte-compatible ONLY by
-// both following the SAME written format, never by sharing code. A change to the on-disk
-// layout in ArtifactFormat.cpp must be mirrored here BY HAND, or the cross-lib round-trip
-// tests (ArtifactReaderTest.cpp for Texture, MeshArtifactReaderTest.cpp for Mesh -- each
-// writes fixtures through the pipeline's own writer and reads them back through THIS
-// reader) fail loudly. Add/keep this same paragraph, naming this file, in
-// ArtifactFormat.hpp's own header comment.
+// The byte codec lives in ArcaneAssets (ArtifactCodec.hpp); the pipeline keeps cook policy.
+// ArtifactFormat.hpp's writers and this reader both call it, so the two sides share the
+// version constant, SectionTag, ContentKind, the common prefix, the container section table
+// and the source hash by construction. The cross-lib round-trip tests (ArtifactReaderTest.cpp
+// for Texture, MeshArtifactReaderTest.cpp for Mesh) still write through the pipeline and read
+// back through this reader.
 //
 // ON-DISK FORMAT (mirrors ArtifactFormat.hpp's header comment field-for-field; every
 // multi-byte field little-endian, one byte at a time -- never a struct memcpy, for the
