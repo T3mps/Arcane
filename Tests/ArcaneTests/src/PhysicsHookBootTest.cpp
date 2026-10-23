@@ -626,12 +626,14 @@ TEST_CASE("a plugin-loaded SimHook is refused and nothing dangles after unload",
     REQUIRE(run.fields.count("loaded") == 1);
     CHECK(run.fields.at("loaded") == "1");
     CHECK(run.fields.at("sealed") == "1");
-    CHECK(run.fields.at("physics2dMappedBefore") == "0");   // the child does not link it
-    CHECK(run.fields.at("physics2dMappedAtLoad") == "1");   // the module really imports it
     CHECK(run.fields.at("hooksAfterLoad") == run.fields.at("hooksBefore"));
     CHECK(run.fields.at("hooksAfterUnload") == run.fields.at("hooksBefore"));
     REQUIRE(run.fields.count("physics2dMappedAfterUnload") == 1);
+#if !defined(__APPLE__)   // the child's witness is Module::MappedModules, empty on macOS
+    CHECK(run.fields.at("physics2dMappedBefore") == "0");   // the child does not link it
+    CHECK(run.fields.at("physics2dMappedAtLoad") == "1");   // the module really imports it
     CHECK(run.fields.at("physics2dMappedAfterUnload") == "0");   // the unload really unmapped it: the fresh Runtime is not vacuous
+#endif
     CHECK(run.fields.count("advanced") == 1);   // the fresh Runtime stepped after the unload
 }
 

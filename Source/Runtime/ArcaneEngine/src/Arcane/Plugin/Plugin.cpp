@@ -210,7 +210,7 @@ namespace Arcane
         // must also clean every DEPENDENCY image this load newly mapped (an
         // engine module the game imports but the host does not link). Their
         // statics ran inside Module::Load and they unmap with `module`.
-        // Windows-only like MappedModules; elsewhere the set is empty.
+        // Windows and Linux, like MappedModules; on macOS the set is empty.
         const std::vector<Module::MappedModule> mappedBefore = Module::MappedModules();
         std::optional<Module> module;
         {

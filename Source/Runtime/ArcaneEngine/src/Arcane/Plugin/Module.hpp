@@ -104,7 +104,9 @@ namespace Arcane
         // Snapshot every image currently mapped in this process. PluginHost
         // diffs this around each load so dependency DLLs that ran registration
         // statics can be disowned before the load session releases them.
-        // Windows-only; empty elsewhere (no dependency is then tracked).
+        // Windows and Linux; empty on macOS (no dependency is then tracked).
+        // PinMapped stays Windows-only, so off Windows the list feeds only
+        // Plugin::Load's refusal net, never PluginHost's dependency pins.
         [[nodiscard]] static std::vector<MappedModule> MappedModules() noexcept;
         // Take a loader reference on the ALREADY-mapped image `mapped` names,
         // located by its base address (not its path, so a renamed or

@@ -376,6 +376,31 @@ namespace Arcane
             while (::Module32NextW(snapshot, &entry));
         }
         ::CloseHandle(snapshot);
+#elif !defined(__APPLE__)
+        // ELF: every loaded object, its span computed exactly as ImageFromHandle
+        // does (load bias + the PT_LOAD union), so a base here compares equal to
+        // the same image's Module::Image().base. Plugin::Load's refusal net
+        // depends on it: a refused game module's freshly mapped dependency
+        // (ArcanePhysics2D in a host that does not link it) unmaps with the
+        // refused module, and its registrations must be dropped first.
+        ::dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void* user) -> int
+        {
+            ElfW(Addr) lo = ~ElfW(Addr){ 0 };
+            ElfW(Addr) hi = 0;
+            for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i)
+            {
+                const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+                if (ph.p_type != PT_LOAD)
+                    continue;
+                lo = std::min(lo, ph.p_vaddr);
+                hi = std::max(hi, ph.p_vaddr + ph.p_memsz);
+            }
+            if (hi > lo)
+                static_cast<std::vector<MappedModule>*>(user)->push_back(MappedModule{
+                    std::filesystem::path(info->dlpi_name ? info->dlpi_name : ""),
+                    ImageSpan{ reinterpret_cast<const void*>(info->dlpi_addr + lo), static_cast<std::size_t>(hi - lo) } });
+            return 0;   // keep iterating: every object
+        }, &result);
 #endif
         return result;
     }
