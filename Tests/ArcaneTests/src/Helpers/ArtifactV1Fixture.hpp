@@ -5,8 +5,8 @@
 // writes; ArtifactV1FixtureTest.cpp and ArtifactCodecGateTest.cpp both include this header.
 // Do not add a third copy.
 
-#include "Helpers/ConstantScan.hpp"
-#include "Helpers/PhysicsV1Baseline.hpp"   // ReadFileBinary / WriteFileBinary
+#include "ConstantScan.hpp"
+#include "PhysicsV1Baseline.hpp"   // ReadFileBinary / WriteFileBinary
 
 #include <Arcane/AssetPipeline/ArtifactFormat.hpp>
 #include <Arcane/AssetPipeline/TextureImporter.hpp>
