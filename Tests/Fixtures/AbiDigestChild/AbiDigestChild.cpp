@@ -35,6 +35,7 @@
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/Plugin.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
+#include <Arcane/Platform/Platform.hpp>   // SharedLibraryFileName
 #include <Arcane/Sim/SimHook.hpp>
 #include <Astra/Core/TypeContext.hpp>
 
@@ -48,8 +49,10 @@ namespace
 {
     bool Physics2DMapped()
     {
+        // A LINKED engine library: ArcanePhysics2D.dll, libArcanePhysics2D.so.
+        const std::string file = Arcane::Platform::SharedLibraryFileName("ArcanePhysics2D");
         for (const Arcane::Module::MappedModule& m : Arcane::Module::MappedModules())
-            if (m.path.stem().string() == "ArcanePhysics2D")
+            if (m.path.filename().string() == file)
                 return true;
         return false;
     }
