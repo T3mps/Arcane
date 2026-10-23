@@ -18,7 +18,9 @@
 // module through a real PluginHost, prints the hook count before the load,
 // after it and after the unload, whether ArcanePhysics2D was mapped, then
 // builds a fresh Runtime and runs ClearSystems, EnsurePhysics and one 1/60
-// Advance. Exits 0 when the hook list never changed and nothing faulted.
+// Advance. Exits 0 when the hook list never changed and nothing faulted. When
+// ArcanePhysics2D is still mapped after the unload, it also prints how many of
+// its registrations the host left in Core (physics2dLeftoverAfterUnload).
 //
 // Third form (Task 8 fix round 2): AbiDigestChild <module> <sentinel>
 // --then-runtime. The default mode, then the proof that a REFUSED load left
@@ -32,6 +34,8 @@
 #include <Arcane/Base/ProcessContext.hpp>
 #include <Arcane/Base/Runtime.hpp>
 #include <Arcane/Config/Bindings/LogBinding.hpp>
+#include <Arcane/Config/CVarRegistry.hpp>   // UnregisterModuleRange: the leftover count
+#include <Arcane/Core/ModuleAttach.hpp>    // UnregisterModuleAttachInRange: the leftover count
 #include <Arcane/Plugin/Module.hpp>
 #include <Arcane/Plugin/Plugin.hpp>
 #include <Arcane/Plugin/PluginHost.hpp>
@@ -47,15 +51,18 @@
 
 namespace
 {
-    bool Physics2DMapped()
+    // ArcanePhysics2D's mapped image, or {nullptr, 0} when it is not mapped.
+    Arcane::Module::ImageSpan Physics2DImage()
     {
         // A LINKED engine library: ArcanePhysics2D.dll, libArcanePhysics2D.so.
         const std::string file = Arcane::Platform::SharedLibraryFileName("ArcanePhysics2D");
         for (const Arcane::Module::MappedModule& m : Arcane::Module::MappedModules())
             if (m.path.filename().string() == file)
-                return true;
-        return false;
+                return m.image;
+        return {};
     }
+
+    bool Physics2DMapped() { return Physics2DImage().base != nullptr; }
 
     int RunSimHookMode(const char* module)
     {
@@ -67,7 +74,7 @@ namespace
         Astra::SetTypeContext(&process->TypeContext(), Astra::ModuleResidency::Resident);
         const std::size_t before = Arcane::SimHooks().size();
         const bool mappedBefore = Physics2DMapped();
-        std::size_t afterLoad = 0, afterUnload = 0;
+        std::size_t afterLoad = 0, afterUnload = 0, leftoverAfterUnload = 0;
         bool loaded = false, mappedAtLoad = false, mappedAfterUnload = true;
         {
             Arcane::Runtime rt(*process);
@@ -75,17 +82,33 @@ namespace
             if (!host.AttachRuntime(rt))
                 return 11;
             loaded = host.Load();
-            mappedAtLoad = Physics2DMapped();
+            const Arcane::Module::ImageSpan atLoad = Physics2DImage();
+            mappedAtLoad = atLoad.base != nullptr;
             afterLoad = Arcane::SimHooks().size();
             host.Unload();
             afterUnload = Arcane::SimHooks().size();
-            mappedAfterUnload = Physics2DMapped();
+            const Arcane::Module::ImageSpan stillMapped = Physics2DImage();
+            mappedAfterUnload = stillMapped.base != nullptr;
+            // The loader may keep the dependency mapped after the host let go
+            // of it (glibc keeps an object a NODELETE marking or a pending TLS
+            // destructor holds, and then runs none of its static destructors).
+            // The host must not rely on either outcome: its load session pins
+            // every image the load newly mapped and drops that image's
+            // registrations before the pin goes (PR #20 review I1). So whatever
+            // a STILL-MAPPED Physics2D image has registered in Core now is what
+            // the host left behind -- a later unmap would leave it dangling.
+            // Dropping it here with the host's own range nets is the count.
+            if (mappedAfterUnload && stillMapped.base == atLoad.base)
+                leftoverAfterUnload =
+                    Arcane::UnregisterModuleAttachInRange(stillMapped.base, stillMapped.size)
+                    + Arcane::CVarRegistry::Get().UnregisterModuleRange(stillMapped.base, stillMapped.size);
             host.DetachRuntime(rt);
         }
         std::printf("loaded=%d\nsealed=%d\nphysics2dMappedBefore=%d\nphysics2dMappedAtLoad=%d\n"
-                    "physics2dMappedAfterUnload=%d\nhooksBefore=%zu\nhooksAfterLoad=%zu\nhooksAfterUnload=%zu\n",
+                    "physics2dMappedAfterUnload=%d\nphysics2dLeftoverAfterUnload=%zu\n"
+                    "hooksBefore=%zu\nhooksAfterLoad=%zu\nhooksAfterUnload=%zu\n",
                     loaded ? 1 : 0, Arcane::SimHooksSealed() ? 1 : 0, mappedBefore ? 1 : 0, mappedAtLoad ? 1 : 0,
-                    mappedAfterUnload ? 1 : 0, before, afterLoad, afterUnload);
+                    mappedAfterUnload ? 1 : 0, leftoverAfterUnload, before, afterLoad, afterUnload);
         std::fflush(stdout);
         // A fresh world after the unload: nothing the module left may run.
         {

@@ -382,7 +382,8 @@ namespace Arcane
         // the same image's Module::Image().base. Plugin::Load's refusal net
         // depends on it: a refused game module's freshly mapped dependency
         // (ArcanePhysics2D in a host that does not link it) unmaps with the
-        // refused module, and its registrations must be dropped first.
+        // refused module, and its registrations must be dropped first. So do
+        // PluginHost's dependency pins (PinMapped below), for the unload path.
         ::dl_iterate_phdr([](dl_phdr_info* info, std::size_t, void* user) -> int
         {
             ElfW(Addr) lo = ~ElfW(Addr){ 0 };
@@ -422,9 +423,31 @@ namespace Arcane
             return std::nullopt;
         }
         return Module(mapped.path, reinterpret_cast<NativeHandle>(handle));
-#else
+#elif defined(__APPLE__)
+        // Mach-O: MappedModules lists nothing here, so there is nothing to pin.
         (void)mapped;
         return std::nullopt;
+#else
+        // ELF (PR #20 review I1): RTLD_NOLOAD never maps -- on a hit it hands
+        // back the loaded object's handle with one more reference, which is
+        // the pin. The path is the dl_iterate_phdr name MappedModules recorded;
+        // the base check is the same guard as Windows': if that path now names
+        // an object at a DIFFERENT base (the one asked about was unmapped and
+        // the file mapped again), it is not ours to pin.
+        if (!mapped.image.base || mapped.path.empty())
+            return std::nullopt;
+        void* handle = ::dlopen(mapped.path.c_str(), RTLD_LAZY | RTLD_NOLOAD);
+        if (!handle)
+        {
+            (void)::dlerror();   // a miss is an answer, not a pending error
+            return std::nullopt;
+        }
+        if (ImageFromHandle(handle).base != mapped.image.base)
+        {
+            ::dlclose(handle);
+            return std::nullopt;
+        }
+        return Module(mapped.path, handle);
 #endif
     }
 

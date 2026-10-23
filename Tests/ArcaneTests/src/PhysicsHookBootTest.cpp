@@ -629,12 +629,21 @@ TEST_CASE("a plugin-loaded SimHook is refused and nothing dangles after unload",
     CHECK(run.fields.at("hooksAfterLoad") == run.fields.at("hooksBefore"));
     CHECK(run.fields.at("hooksAfterUnload") == run.fields.at("hooksBefore"));
     REQUIRE(run.fields.count("physics2dMappedAfterUnload") == 1);
-#if !defined(__APPLE__)   // the child's witness is Module::MappedModules, empty on macOS
+    REQUIRE(run.fields.count("physics2dLeftoverAfterUnload") == 1);
+#if !defined(__APPLE__)   // the child's witness is Module::MappedModules, empty on macOS (no dependency net there yet)
     CHECK(run.fields.at("physics2dMappedBefore") == "0");   // the child does not link it
     CHECK(run.fields.at("physics2dMappedAtLoad") == "1");   // the module really imports it
+    // After the unload Physics2D is either unmapped, or still mapped with none
+    // of its registrations left in Core: the host's load session pinned the
+    // fresh dependency and disowned it before letting go (PR #20 review I1).
+    // Whether the loader then unmaps it is runtime state, not a guarantee --
+    // on every Linux leg (run 39929573568) glibc kept libArcanePhysics2D.so
+    // mapped in this child, while the refusal path's dlclose unmapped it
+    // (AbiDigestTest:975). The leftover count is 0 when it is unmapped.
+    CHECK(run.fields.at("physics2dLeftoverAfterUnload") == "0");
 #endif
-#if defined(_WIN32)   // FreeLibrary unmaps the dependency; glibc's dlclose kept it mapped on every Linux leg (run 39929573568)
-    CHECK(run.fields.at("physics2dMappedAfterUnload") == "0");   // the unload really unmapped it: the fresh Runtime is not vacuous
+#if defined(_WIN32)   // FreeLibrary drops the last reference: the fresh Runtime below is not vacuous
+    CHECK(run.fields.at("physics2dMappedAfterUnload") == "0");
 #endif
     CHECK(run.fields.count("advanced") == 1);   // the fresh Runtime stepped after the unload
 }
