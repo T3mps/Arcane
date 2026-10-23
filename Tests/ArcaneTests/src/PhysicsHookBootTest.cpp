@@ -39,6 +39,10 @@
 #include <string>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <sys/wait.h>   // WIFEXITED / WEXITSTATUS: pclose's wait status
+#endif
+
 namespace
 {
     using namespace Arcane::Test;
@@ -47,6 +51,12 @@ namespace
     // and the child's Catch2 report. The exe is addressed by its full path (a
     // bare name is not found when cmd.exe skips the current directory, and a
     // "not recognized" exit 1 would pass for a red child).
+#if !defined(_WIN32)
+    // POSIX pclose returns the wait status, not the exit code (Catch2's 42
+    // arrives as 42 << 8); _pclose on Windows already returns the exit code.
+    int ExitCodeOf(int status) { return status != -1 && WIFEXITED(status) ? WEXITSTATUS(status) : status; }
+#endif
+
     struct NoHookChildRun { int exitCode = -1; std::string output; };
     NoHookChildRun SpawnNoHookChild()
     {
@@ -67,7 +77,7 @@ namespace
 #if defined(_WIN32)
         run.exitCode = _pclose(p);
 #else
-        run.exitCode = pclose(p);
+        run.exitCode = ExitCodeOf(pclose(p));
 #endif
         return run;
     }
@@ -126,7 +136,7 @@ namespace
 #if defined(_WIN32)
         run.exitCode = _pclose(pipe);
 #else
-        run.exitCode = pclose(pipe);
+        run.exitCode = ExitCodeOf(pclose(pipe));
 #endif
         std::istringstream lines(run.output);
         for (std::string l; std::getline(lines, l);)
