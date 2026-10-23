@@ -632,6 +632,8 @@ TEST_CASE("a plugin-loaded SimHook is refused and nothing dangles after unload",
 #if !defined(__APPLE__)   // the child's witness is Module::MappedModules, empty on macOS
     CHECK(run.fields.at("physics2dMappedBefore") == "0");   // the child does not link it
     CHECK(run.fields.at("physics2dMappedAtLoad") == "1");   // the module really imports it
+#endif
+#if defined(_WIN32)   // FreeLibrary unmaps the dependency; glibc's dlclose kept it mapped on every Linux leg (run 39929573568)
     CHECK(run.fields.at("physics2dMappedAfterUnload") == "0");   // the unload really unmapped it: the fresh Runtime is not vacuous
 #endif
     CHECK(run.fields.count("advanced") == 1);   // the fresh Runtime stepped after the unload
