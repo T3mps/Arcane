@@ -20,7 +20,9 @@
 // builds a fresh Runtime and runs ClearSystems, EnsurePhysics and one 1/60
 // Advance. Exits 0 when the hook list never changed and nothing faulted. When
 // ArcanePhysics2D is still mapped after the unload, it also prints how many of
-// its registrations the host left in Core (physics2dLeftoverAfterUnload).
+// its registrations the host left in Core (physics2dLeftoverAfterUnload);
+// then a second load session counts Physics2D's registrations while loaded
+// (physics2dRegisteredSecondSession: they must be back).
 //
 // Third form (Task 8 fix round 2): AbiDigestChild <module> <sentinel>
 // --then-runtime. The default mode, then the proof that a REFUSED load left
@@ -89,15 +91,16 @@ namespace
             afterUnload = Arcane::SimHooks().size();
             const Arcane::Module::ImageSpan stillMapped = Physics2DImage();
             mappedAfterUnload = stillMapped.base != nullptr;
-            // The loader may keep the dependency mapped after the host let go
-            // of it (glibc keeps an object a NODELETE marking or a pending TLS
-            // destructor holds, and then runs none of its static destructors).
-            // The host must not rely on either outcome: its load session pins
-            // every image the load newly mapped and drops that image's
-            // registrations before the pin goes (PR #20 review I1). So whatever
-            // a STILL-MAPPED Physics2D image has registered in Core now is what
-            // the host left behind -- a later unmap would leave it dangling.
-            // Dropping it here with the host's own range nets is the count.
+            // The host's load session pins every image the load newly mapped
+            // and drops that image's registrations before the pin goes (PR #20
+            // review I1), whether or not the loader then unmaps it. Something
+            // else may still hold a reference -- before re-review I-R1 it was
+            // Module::Load's own leaked beside-the-exe retry handle on POSIX
+            // (this child's temp-dir module copy cannot find Physics2D through
+            // its $ORIGIN runpath). So whatever a STILL-MAPPED Physics2D image
+            // has registered in Core now is what the host left behind -- a
+            // later unmap would leave it dangling. Dropping it here with the
+            // host's own range nets is the count.
             if (mappedAfterUnload && stillMapped.base == atLoad.base)
                 leftoverAfterUnload =
                     Arcane::UnregisterModuleAttachInRange(stillMapped.base, stillMapped.size)
@@ -110,6 +113,32 @@ namespace
                     loaded ? 1 : 0, Arcane::SimHooksSealed() ? 1 : 0, mappedBefore ? 1 : 0, mappedAtLoad ? 1 : 0,
                     mappedAfterUnload ? 1 : 0, leftoverAfterUnload, before, afterLoad, afterUnload);
         std::fflush(stdout);
+        // A SECOND load session in the same process (re-review I-R1): the
+        // dependency must come back with its registrations. If the first
+        // session's dependency stayed mapped after EndLoadSession disowned
+        // it, this load finds it pre-mapped, its statics do not re-run, and it
+        // is pinned by no session -- it would run with no module-attach
+        // callback, cvars or log setters. Counted (destructively, with the
+        // host's range nets) while the second session still holds it.
+        std::size_t registeredSecondSession = 0;
+        bool loadedSecond = false;
+        {
+            Arcane::Runtime rt(*process);
+            Arcane::PluginHost host(*process, std::filesystem::path(module));
+            if (!host.AttachRuntime(rt))
+                return 12;
+            loadedSecond = host.Load();
+            const Arcane::Module::ImageSpan image = Physics2DImage();
+            if (image.base)
+                registeredSecondSession =
+                    Arcane::UnregisterModuleAttachInRange(image.base, image.size)
+                    + Arcane::CVarRegistry::Get().UnregisterModuleRange(image.base, image.size);
+            host.Unload();
+            host.DetachRuntime(rt);
+        }
+        std::printf("loadedSecondSession=%d\nphysics2dRegisteredSecondSession=%zu\n",
+                    loadedSecond ? 1 : 0, registeredSecondSession);
+        std::fflush(stdout);
         // A fresh world after the unload: nothing the module left may run.
         {
             Arcane::Runtime rt(*process);
@@ -119,7 +148,7 @@ namespace
         }
         std::printf("advanced=1\n");
         std::fflush(stdout);
-        const bool ok = loaded && before == afterLoad && before == afterUnload;
+        const bool ok = loaded && loadedSecond && before == afterLoad && before == afterUnload;
         return ok ? 0 : 1;
     }
 

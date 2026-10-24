@@ -79,9 +79,11 @@ namespace Arcane
     }
 
     Module::Module(Module&& other) noexcept
-        : m_path(std::move(other.m_path)), m_handle(other.m_handle)
+        : m_path(std::move(other.m_path)), m_handle(other.m_handle),
+          m_retryDependencies(std::move(other.m_retryDependencies))
     {
         other.m_handle = nullptr;
+        other.m_retryDependencies.clear();
     }
 
     Module& Module::operator=(Module&& other) noexcept
@@ -91,7 +93,9 @@ namespace Arcane
             Unload();
             m_path = std::move(other.m_path);
             m_handle = other.m_handle;
+            m_retryDependencies = std::move(other.m_retryDependencies);
             other.m_handle = nullptr;
+            other.m_retryDependencies.clear();
         }
         return *this;
     }
@@ -131,6 +135,7 @@ namespace Arcane
                 resolved = std::filesystem::path(".") / path;
         }
         NativeHandle handle = ::dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
+        std::vector<NativeHandle> retryDependencies;
 
         // The DEPENDENCY half of the same rule. The PE loader maps a module's
         // own imports (a game module's ArcaneClient.dll) from the application
@@ -178,16 +183,35 @@ namespace Arcane
             const std::filesystem::path besideExe = std::filesystem::path(self).parent_path() / dependency;
             if (!std::filesystem::exists(besideExe, ec))
                 break;
-            if (!::dlopen(besideExe.c_str(), RTLD_NOW | RTLD_LOCAL))
+            NativeHandle dependencyHandle = ::dlopen(besideExe.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!dependencyHandle)
             {
                 const char* depErr = ::dlerror();
                 t_lastLoadError = depErr ? depErr : err;
                 break;
             }
+            retryDependencies.push_back(dependencyHandle);
             handle = ::dlopen(resolved.c_str(), RTLD_NOW | RTLD_LOCAL);
         }
         if (handle)
             t_lastLoadError.clear();
+        // Who owns the retry's dependency references (PR #20 re-review I-R1).
+        // ELF: the returned Module, released after its own handle in Unload(),
+        // so the dependency lives as long as the module -- PluginHost's pin
+        // (PinMapped) is then the LAST reference, the image unmaps after
+        // EndLoadSession disowned it, and the next load session maps it fresh
+        // and re-runs its statics. A leaked reference instead kept it mapped
+        // for the life of the process with its registrations dropped, so every
+        // later session skipped it as already mapped and ran without its
+        // cvars, log setters and module-attach callback. A FAILED load keeps
+        // them mapped (their statics ran; nothing disowns them here), and
+        // macOS keeps them too: no dependency net runs there, so an unmap
+        // would leave their registrations dangling.
+#if defined(__APPLE__)
+        retryDependencies.clear();
+#endif
+        if (!handle)
+            retryDependencies.clear();
 #endif
         if (!handle)
             return std::nullopt;
@@ -199,7 +223,11 @@ namespace Arcane
         // initiated load goes through, which is why the note lives here.
         ForeignModules::NoteOwned(path.generic_string());
 
-        return Module(std::move(path), handle);
+        Module loaded(std::move(path), handle);
+#if !defined(_WIN32)
+        loaded.m_retryDependencies = std::move(retryDependencies);
+#endif
+        return loaded;
     }
 
     void* Module::Symbol(const char* name) const noexcept
@@ -621,7 +649,12 @@ namespace Arcane
         ::FreeLibrary(reinterpret_cast<HMODULE>(m_handle));
 #else
         ::dlclose(m_handle);
+        // After the module: its own dependency list no longer holds them, so
+        // these are the references Load()'s retry took (ELF; see Load).
+        for (NativeHandle dependency : m_retryDependencies)
+            ::dlclose(dependency);
 #endif
+        m_retryDependencies.clear();
         m_handle = nullptr;
     }
 }

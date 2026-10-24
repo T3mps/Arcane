@@ -128,5 +128,10 @@ namespace Arcane
 
         std::filesystem::path m_path;
         NativeHandle m_handle = nullptr;
+        // ELF only: the dependency handles Load()'s beside-the-exe retry opened
+        // for THIS module, released right after m_handle -- the dependency then
+        // lives exactly as long as the module, as a PE import does. Empty
+        // elsewhere (macOS keeps them: no dependency net runs there).
+        std::vector<NativeHandle> m_retryDependencies;
     };
 }
