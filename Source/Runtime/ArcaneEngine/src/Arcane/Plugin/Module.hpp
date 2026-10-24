@@ -104,14 +104,16 @@ namespace Arcane
         // Snapshot every image currently mapped in this process. PluginHost
         // diffs this around each load so dependency DLLs that ran registration
         // statics can be disowned before the load session releases them.
-        // Windows-only; empty elsewhere (no dependency is then tracked).
+        // Windows and Linux; empty on macOS (no dependency is then tracked:
+        // neither Plugin::Load's refusal net nor PluginHost's pins run there).
         [[nodiscard]] static std::vector<MappedModule> MappedModules() noexcept;
-        // Take a loader reference on the ALREADY-mapped image `mapped` names,
-        // located by its base address (not its path, so a renamed or
-        // differently-pathed DLL is still the one image). Nothing is loaded and
-        // no initializer runs; destroying the returned Module drops exactly that
-        // reference. nullopt when no image is mapped at that base any more, and
-        // always on non-Windows.
+        // Take a loader reference on the ALREADY-mapped image `mapped` names.
+        // Windows locates it by its base address (so a renamed or
+        // differently-pathed DLL is still the one image); Linux reopens its
+        // path with RTLD_NOLOAD and requires the same base. Nothing is loaded
+        // and no initializer runs; destroying the returned Module drops exactly
+        // that reference. nullopt when no image is mapped at that base any
+        // more, and always on macOS.
         [[nodiscard]] static std::optional<Module> PinMapped(const MappedModule& mapped) noexcept;
         // The image span of a module `path` already mapped in this process, or
         // `{nullptr, 0}` when it is not. Plugin::Load compares this to the
@@ -126,5 +128,10 @@ namespace Arcane
 
         std::filesystem::path m_path;
         NativeHandle m_handle = nullptr;
+        // ELF only: the dependency handles Load()'s beside-the-exe retry opened
+        // for THIS module, released right after m_handle -- the dependency then
+        // lives exactly as long as the module, as a PE import does. Empty
+        // elsewhere (macOS keeps them: no dependency net runs there).
+        std::vector<NativeHandle> m_retryDependencies;
     };
 }
